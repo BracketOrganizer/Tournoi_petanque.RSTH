@@ -68,6 +68,7 @@ const ST = {
   phase: 'config',   // 'config' | 'pools' | 'bracket' | 'done'
   activePoolRound: 0,
   activeBracketRound: { P: 0, C: 0 },
+  page4View: null,
   liveOpen: false,
   cfg: {
     name: 'Trophée Pétanque Doublette — RSTH',
@@ -411,6 +412,10 @@ window.saveCfgAndNext = async function() {
   onCfgChange();
   await saveTournament({ cfg: ST.cfg });
   goTo(2);
+};
+window.goToPlanningFromTeams = function() {
+  if (ST.teams.length !== ST.cfg.n) { alert(`Il faut exactement ${ST.cfg.n} équipes (actuellement ${ST.teams.length}).`); return; }
+  goTo(3);
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -796,7 +801,40 @@ function computeFinalRanking() {
         }
       }
     }
-    for (let rd = depth - 3; rd >= 0; rd--) {
+    if (depth >= 3) {
+      const w0 = classifSemiWinner(bk, 0), w1 = classifSemiWinner(bk, 1);
+      const lo0 = classifSemiLoser(bk, 0), lo1 = classifSemiLoser(bk, 1);
+      if (w0 && w1) {
+        const rf = classifResult(bk, 'f1', 0);
+        if (rf.ga !== '' && rf.gb !== '') {
+          const w5 = (+rf.ga > +rf.gb) ? w0 : w1, l6 = (+rf.ga > +rf.gb) ? w1 : w0;
+          ranking.push({ place, teamId: w5, label }); place++;
+          ranking.push({ place, teamId: l6, label }); place++;
+        } else {
+          ranking.push({ place, teamId: w0, label, tied: true });
+          ranking.push({ place, teamId: w1, label, tied: true });
+          place += 2;
+        }
+      }
+      if (lo0 && lo1) {
+        const rsf = classifResult(bk, 'f2', 0);
+        if (rsf.ga !== '' && rsf.gb !== '') {
+          const w7 = (+rsf.ga > +rsf.gb) ? lo0 : lo1, l8 = (+rsf.ga > +rsf.gb) ? lo1 : lo0;
+          ranking.push({ place, teamId: w7, label }); place++;
+          ranking.push({ place, teamId: l8, label }); place++;
+        } else {
+          ranking.push({ place, teamId: lo0, label, tied: true });
+          ranking.push({ place, teamId: lo1, label, tied: true });
+          place += 2;
+        }
+      }
+      if (!w0 && !w1 && !lo0 && !lo1) {
+        const round = classifQuartRound(bk);
+        const n = bracketRoundMatchCount(bk, round);
+        for (let idx = 0; idx < n; idx++) { const l = bracketLoser(bk, round, idx); if (l) { ranking.push({ place, teamId: l, label, tied: true }); place++; } }
+      }
+    }
+    for (let rd = depth - 4; rd >= 0; rd--) {
       const n = bracketRoundMatchCount(bk, rd);
       const losers = [];
       for (let idx = 0; idx < n; idx++) { const l = bracketLoser(bk, rd, idx); if (l) losers.push(l); }
@@ -924,6 +962,8 @@ function bracketMatchCardHTML(bracket, round, idx) {
   const done = r.ga !== '' && r.gb !== '';
   const ecartOk = done && Math.abs(+r.ga - +r.gb) >= ST.cfg.ecart;
   const warn = done && !ecartOk ? `<span style="color:var(--ylw);font-size:11px"> ⚠ écart < ${ST.cfg.ecart} pts</span>` : '';
+  const isQuart = classifQuartRound(bracket) === round;
+  const hint = isQuart ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">➜ Gagnant : demi-finale · Perdant : places à jouer 5-8</div>` : '';
   return `<div style="background:var(--s1);border:1px solid ${done?(ecartOk?'var(--grn)':'var(--ylw)'):'var(--bdr)'};border-radius:10px;padding:10px 14px;margin-bottom:8px">
     <div style="font-size:11px;color:var(--muted);display:flex;justify-content:space-between">${bracketRoundName(ST.brackets[bracket].depth, round)} · Match ${idx + 1}${warn}</div>
     <div style="display:flex;align-items:center;gap:10px;margin-top:6px">
@@ -934,6 +974,7 @@ function bracketMatchCardHTML(bracket, round, idx) {
         !isScorer())}
       <div style="flex:1;font-weight:600;text-align:right">${tName(b)}</div>
     </div>
+    ${hint}
   </div>`;
 }
 function petiteFinaleCardHTML(bracket) {
@@ -951,6 +992,72 @@ function petiteFinaleCardHTML(bracket) {
     </div>
   </div>`;
 }
+// ── Matchs de classement (places à jouer) pour les perdants de quart de finale ──
+// Concerne les tableaux dont la profondeur est ≥ 3 (8 équipes et plus). Les 4 perdants
+// des quarts s'affrontent en 2 demi-finales classement, puis le match pour la 5e place
+// (gagnants des demi classement) et le match pour la 7e place (perdants des demi classement).
+function classifQuartRound(bracket) {
+  const br = ST.brackets[bracket]; if (!br || br.depth < 3) return null;
+  return br.depth - 3; // index du tour "Quart de finale"
+}
+function classifMatchId(bracket, sub, idx) { return 'br-' + bracket + '-cl-' + sub + '-m' + idx; }
+function classifSemiTeams(bracket, idx) {
+  const round = classifQuartRound(bracket); if (round == null) return { a: null, b: null };
+  const losers = [bracketLoser(bracket, round, 0), bracketLoser(bracket, round, 1), bracketLoser(bracket, round, 2), bracketLoser(bracket, round, 3)];
+  return { a: losers[idx * 2] ?? null, b: losers[idx * 2 + 1] ?? null };
+}
+function classifResult(bracket, sub, idx) {
+  const id = classifMatchId(bracket, sub, idx);
+  const d = ST.results[id] || {};
+  return { ga: d.ga != null ? d.ga : '', gb: d.gb != null ? d.gb : '' };
+}
+function classifSemiWinner(bracket, idx) {
+  const { a, b } = classifSemiTeams(bracket, idx); if (!a || !b) return null;
+  const r = classifResult(bracket, 'demi', idx); if (r.ga === '' || r.gb === '') return null;
+  return (+r.ga > +r.gb) ? a : b;
+}
+function classifSemiLoser(bracket, idx) {
+  const { a, b } = classifSemiTeams(bracket, idx); if (!a || !b) return null;
+  const r = classifResult(bracket, 'demi', idx); if (r.ga === '' || r.gb === '') return null;
+  return (+r.ga > +r.gb) ? b : a;
+}
+window.setClassifResult = async function(bracket, sub, idx, f, v) {
+  if (!isScorer()) return;
+  const id = classifMatchId(bracket, sub, idx);
+  const cur = ST.results[id] || { ga: '', gb: '' };
+  cur[f] = v === '' ? '' : Math.max(0, Math.min(ST.cfg.scoreMax + 5, +v));
+  ST.results[id] = cur;
+  await saveResult(id, cur.ga, cur.gb, false);
+  refreshCurrentPage();
+};
+function classifMiniCardHTML(bracket, title, color, a, b, sub, idx, waitTxt) {
+  if (!a || !b) return `<div class="info info-b">${waitTxt}</div>`;
+  const r = classifResult(bracket, sub, idx);
+  return `<div style="background:var(--s1);border:2px solid ${color};border-radius:10px;padding:10px 14px;margin-bottom:8px">
+    <div style="font-size:11px;color:${color};font-weight:700">${title}</div>
+    <div style="display:flex;align-items:center;gap:10px;margin-top:6px">
+      <div style="flex:1;font-weight:600">${tName(a)}</div>
+      ${scoreInputHTML(r.ga, r.gb, `setClassifResult('${bracket}','${sub}',${idx},'ga',this.value)`, `setClassifResult('${bracket}','${sub}',${idx},'gb',this.value)`, !isScorer())}
+      <div style="flex:1;font-weight:600;text-align:right">${tName(b)}</div>
+    </div>
+  </div>`;
+}
+function classifCardsHTML(bracket) {
+  const round = classifQuartRound(bracket); if (round == null) return '';
+  let html = '';
+  for (let idx = 0; idx < 2; idx++) {
+    const { a, b } = classifSemiTeams(bracket, idx);
+    html += classifMiniCardHTML(bracket, `🏅 DEMI-FINALE CLASSEMENT (places 5 à 8) · Match ${idx + 1}`, 'var(--brand2)', a, b, 'demi', idx,
+      'Demi-finale classement en attente des résultats des quarts de finale.');
+  }
+  const w0 = classifSemiWinner(bracket, 0), w1 = classifSemiWinner(bracket, 1);
+  html += classifMiniCardHTML(bracket, '🏅 MATCH POUR LA 5e PLACE', 'var(--brand)', w0, w1, 'f1', 0,
+    'Match pour la 5e place disponible une fois les demi-finales classement terminées.');
+  const l0 = classifSemiLoser(bracket, 0), l1 = classifSemiLoser(bracket, 1);
+  html += classifMiniCardHTML(bracket, '🏅 MATCH POUR LA 7e PLACE', 'var(--ylw)', l0, l1, 'f2', 0,
+    'Match pour la 7e place disponible une fois les demi-finales classement terminées.');
+  return html;
+}
 function renderBracketRoundTabs(bracket) {
   const el = document.getElementById('bracketRoundTabs_' + bracket); if (!el) return;
   const br = ST.brackets[bracket]; if (!br) { el.innerHTML = ''; return; }
@@ -961,6 +1068,7 @@ function renderBracketRoundTabs(bracket) {
     html += `<button class="rtab ${ST.activeBracketRound[bracket] === rd ? 'rtab-active' : ''}" onclick="setBracketRound('${bracket}',${rd})">${bracketRoundName(br.depth, rd)} ${done ? '✓' : ''}</button>`;
   }
   if (br.depth >= 2) html += `<button class="rtab ${ST.activeBracketRound[bracket] === 'pf' ? 'rtab-active' : ''}" onclick="setBracketRound('${bracket}','pf')">🥉 Petite finale</button>`;
+  if (br.depth >= 3) html += `<button class="rtab ${ST.activeBracketRound[bracket] === 'cl' ? 'rtab-active' : ''}" onclick="setBracketRound('${bracket}','cl')">🏅 Places à jouer 5-8</button>`;
   el.innerHTML = html;
 }
 window.setBracketRound = async function(bracket, rd) {
@@ -979,15 +1087,27 @@ function renderBracketColumn(bracket, title) {
   } else {
     const rd = ST.activeBracketRound[bracket];
     if (rd === 'pf') body = petiteFinaleCardHTML(bracket);
+    else if (rd === 'cl') body = classifCardsHTML(bracket);
     else { const n = bracketRoundMatchCount(bracket, rd); for (let idx = 0; idx < n; idx++) body += bracketMatchCardHTML(bracket, rd, idx); }
   }
   const listEl = document.getElementById('bracketMatchList_' + bracket);
   if (listEl) listEl.innerHTML = body || '<div class="info info-b">Rien à afficher.</div>';
 }
 function renderBracketsView() { renderBracketColumn('P', 'Principale'); renderBracketColumn('C', 'Consolante'); }
+window.setPage4View = function(v) {
+  ST.page4View = v;
+  renderTournamentPage();
+};
 function renderTournamentPage() {
   const poolsEl = document.getElementById('poolsView'), bracketsEl = document.getElementById('bracketsView');
-  if (ST.phase === 'pools') {
+  const tabsEl = document.getElementById('page4Tabs');
+  const hasBrackets = ST.phase === 'bracket' || ST.phase === 'done';
+  if (tabsEl) tabsEl.style.display = hasBrackets ? 'flex' : 'none';
+  const view = hasBrackets ? (ST.page4View || 'bracket') : 'pools';
+  const tabPools = document.getElementById('tabPoolsBtn'), tabBrackets = document.getElementById('tabBracketsBtn');
+  if (tabPools) tabPools.className = 'btn btn-sm ' + (view === 'pools' ? 'btn-b' : 'btn-ghost');
+  if (tabBrackets) tabBrackets.className = 'btn btn-sm ' + (view === 'bracket' ? 'btn-b' : 'btn-ghost');
+  if (view === 'pools') {
     if (poolsEl) poolsEl.style.display = '';
     if (bracketsEl) bracketsEl.style.display = 'none';
     renderPoolsView();
@@ -997,7 +1117,7 @@ function renderTournamentPage() {
     renderBracketsView();
   }
   const btnFin = document.getElementById('btnGoFinal');
-  if (btnFin) btnFin.style.display = ST.phase === 'bracket' ? '' : 'none';
+  if (btnFin) btnFin.style.display = (ST.phase === 'bracket' && view === 'bracket') ? '' : 'none';
 }
 
 // ═══════════════════════════════════════════════════════════
@@ -1611,6 +1731,7 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
     <button class="btn btn-ghost btn-sm" onclick="clearTeams()" style="color:var(--red)">🗑️ Vider la liste</button>
   </div>
   <div id="teamsListEl"></div>
+  <button class="btn btn-b" id="teamsNextBtn" style="margin-top:16px" onclick="goToPlanningFromTeams()">Suivant : Planning →</button>
 </div>
 </div>
 
@@ -1626,6 +1747,10 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
 <div class="page" id="page4">
 <div class="wrap">
   <div class="sec-ttl">🎯 Tournoi en direct</div>
+  <div id="page4Tabs" style="display:none;gap:8px;margin-bottom:14px;flex-wrap:wrap">
+    <button class="btn btn-ghost btn-sm" id="tabPoolsBtn" onclick="setPage4View('pools')">📋 Phase 1 — Poules</button>
+    <button class="btn btn-ghost btn-sm" id="tabBracketsBtn" onclick="setPage4View('bracket')">🏆 Phase 2 — Tableaux</button>
+  </div>
 
   <div id="poolsView">
     <div class="rtabs ovx" id="poolRoundTabs"></div>
