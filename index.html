@@ -79,7 +79,9 @@ const ST = {
     start: '09:00',
     scoreMax: 13,
     ecart: 2,          // 2 points d'écart obligatoires
-    balance: 'level'
+    balance: 'level',
+    pauseAfter: 0,     // pause déjeuner après le tour n° (0 = aucune pause)
+    pauseMin: 60        // durée de la pause en minutes
   }
 };
 
@@ -371,6 +373,7 @@ function syncCfgForm() {
   set('cfgN', c.n); set('cfgCourts', c.courts);
   set('cfgMt', c.mt); set('cfgTt', c.tt); set('cfgStart', c.start);
   set('cfgScoreMax', c.scoreMax); set('cfgEcart', c.ecart);
+  set('cfgPauseAfter', c.pauseAfter); set('cfgPauseMin', c.pauseMin);
   const bal = document.getElementById('cfgBalance'); if (bal) bal.value = c.balance;
   renderCfgSummary();
 }
@@ -379,10 +382,11 @@ function renderCfgSummary() {
   const c = ST.cfg;
   const numGroups = computeGroupSizes(c.n).length;
   const nPrincipale = numGroups * 2, nConsolante = c.n - nPrincipale;
+  const pauseTxt = c.pauseAfter > 0 ? ` · 🍽️ Pause déjeuner de <strong>${c.pauseMin} min</strong> après le tour <strong>${c.pauseAfter}</strong>` : '';
   el.innerHTML = `<div class="info info-b">
     🎯 <strong>${c.n}</strong> équipes (${c.n * 2} joueurs) · <strong>${numGroups}</strong> groupes de 4 en Phase 1 ·
     <strong>${c.courts}</strong> terrains · partie ≈ <strong>${c.mt} min</strong> (+${c.tt} min battement) ·
-    Score : <strong>${c.scoreMax} pts</strong> avec <strong>${c.ecart} pts d'écart</strong> min<br>
+    Score : <strong>${c.scoreMax} pts</strong> avec <strong>${c.ecart} pts d'écart</strong> min${pauseTxt}<br>
     📊 Phase 2 : <strong>${nPrincipale}</strong> équipes en Principale · <strong>${nConsolante}</strong> en Consolante
   </div>`;
 }
@@ -397,6 +401,8 @@ window.onCfgChange = function() {
   ST.cfg.scoreMax = Math.max(11, Math.min(25, +document.getElementById('cfgScoreMax').value || 13));
   ST.cfg.ecart  = Math.max(1,  Math.min(3, +document.getElementById('cfgEcart').value || 2));
   ST.cfg.balance = document.getElementById('cfgBalance').value || 'level';
+  ST.cfg.pauseAfter = Math.max(0, Math.min(20, +document.getElementById('cfgPauseAfter').value || 0));
+  ST.cfg.pauseMin   = Math.max(0, Math.min(180, +document.getElementById('cfgPauseMin').value || 0));
   renderCfgSummary();
   document.title = '🎯 ' + ST.cfg.name;
   const brandEl = document.getElementById('hdrBrandText'); if (brandEl) brandEl.textContent = '🎯 ' + ST.cfg.name;
@@ -517,20 +523,22 @@ function roundRobinPairs(teamIds) {
 }
 function buildPoolSchedule() {
   const courts = ST.cfg.courts, mt = ST.cfg.mt, tt = ST.cfg.tt || 10, start = ST.cfg.start || '09:00';
+  const pauseAfter = ST.cfg.pauseAfter || 0, pauseMin = ST.cfg.pauseMin || 0;
   const groupRounds = ST.groups.map(g => roundRobinPairs(g.teamIds));
   const maxRounds = Math.max(0, ...groupRounds.map(r => r.length));
-  const schedule = []; let counter = 0, slotIndex = 0;
+  const schedule = []; let counter = 0, elapsed = 0;
   for (let r = 0; r < maxRounds; r++) {
     const roundMatches = [];
     ST.groups.forEach((g, gi) => { (groupRounds[gi][r] || []).forEach(([a, b]) => roundMatches.push({ group: g.id, a, b })); });
     const waveCount = Math.max(1, Math.ceil(roundMatches.length / courts));
     for (let w = 0; w < waveCount; w++) {
-      const waveTime = addMinutes(start, slotIndex * (mt + tt));
+      const waveTime = addMinutes(start, elapsed);
       roundMatches.slice(w * courts, (w + 1) * courts).forEach((m, ci) => {
         schedule.push({ matchId: 'p1-' + m.group + '-' + (counter++), group: m.group, round: r, wave: w, court: ci + 1, time: waveTime, a: m.a, b: m.b });
       });
-      slotIndex++;
+      elapsed += mt + tt;
     }
+    if (pauseAfter > 0 && (r + 1) === pauseAfter && pauseMin > 0) elapsed += pauseMin;
   }
   return schedule;
 }
@@ -590,8 +598,9 @@ function renderPlanningPreview() {
   if (!ST.poolSchedule.length) ST.poolSchedule = buildPoolSchedule();
   const numRounds = Math.max(0, ...ST.poolSchedule.map(m => m.round)) + 1;
   const endTime = ST.poolSchedule.length > 0 ? ST.poolSchedule[ST.poolSchedule.length - 1].time : '--:--';
+  const pauseTxt = ST.cfg.pauseAfter > 0 ? ` · 🍽️ Pause déjeuner de <strong>${ST.cfg.pauseMin} min</strong> prévue après le tour <strong>${ST.cfg.pauseAfter}</strong>` : '';
   el.innerHTML = `
-    <div class="info info-b" style="margin-bottom:12px">📋 <strong>${ST.groups.length}</strong> groupes · <strong>${ST.poolSchedule.length}</strong> matchs de phase 1 répartis sur <strong>${numRounds}</strong> tour${numRounds>1?'s':''} · Dernier match prévu vers <strong>${endTime}</strong></div>
+    <div class="info info-b" style="margin-bottom:12px">📋 <strong>${ST.groups.length}</strong> groupes · <strong>${ST.poolSchedule.length}</strong> matchs de phase 1 répartis sur <strong>${numRounds}</strong> tour${numRounds>1?'s':''} · Dernier match prévu vers <strong>${endTime}</strong>${pauseTxt}</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin:14px 0">
       ${ST.groups.map(g => `<div style="background:var(--s1);border:1px solid var(--bdr);border-radius:10px;padding:10px 12px">
         <div style="font-family:'Oswald',sans-serif;font-weight:700;color:var(--brand);margin-bottom:6px">Groupe ${g.id.slice(1)}</div>
@@ -1554,6 +1563,13 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
       <div><label>Durée d'une partie (min)</label><input type="number" id="cfgMt" min="20" max="90" onchange="onCfgChange()"></div>
       <div><label>Battement entre parties (min)</label><input type="number" id="cfgTt" min="0" max="30" onchange="onCfgChange()"></div>
       <div><label>Heure de début</label><input type="time" id="cfgStart" onchange="onCfgChange()"></div>
+    </div>
+  </div>
+  <div class="card">
+    <div class="card-ttl">🍽️ Pause déjeuner</div>
+    <div class="field-grid">
+      <div><label>Pause après le tour n° (0 = aucune pause)</label><input type="number" id="cfgPauseAfter" min="0" max="20" onchange="onCfgChange()"></div>
+      <div><label>Durée de la pause (min)</label><input type="number" id="cfgPauseMin" min="0" max="180" onchange="onCfgChange()"></div>
     </div>
   </div>
   <div class="card">
