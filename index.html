@@ -70,6 +70,9 @@ const ST = {
   activeBracketRound: { P: 0, C: 0 },
   page4View: null,
   liveOpen: false,
+  registrationOpen: false,
+  registrations: [],
+  regSubmitted: false,
   cfg: {
     name: 'Trophée Pétanque Doublette — RSTH',
     club: 'RSTH',
@@ -198,7 +201,9 @@ window.enterLiveModeAndGo = async function(target) {
   startLiveWatch();
   if (target === 'TV') goTo('TV');
   else if (target === 'T') goTo('T');
+  else if (target === 'REG') goTo('REG');
   else if (target === 'R') { goTo(4); toggleRules(); }
+  else if (target === 4) goTo(4);
 };
 function handleLiveOpenChange(nowOpen) {
   ST.liveOpen = nowOpen;
@@ -223,6 +228,18 @@ function stopLiveWatch() {
   if (unsubLiveWatch) { unsubLiveWatch(); unsubLiveWatch = null; }
   if (liveWatchIv)    { clearInterval(liveWatchIv); liveWatchIv = null; }
 }
+function updateRegistrationUI() {
+  const box = document.getElementById('loginRegisterBox');
+  if (box) box.style.display = ST.registrationOpen ? 'block' : 'none';
+  const navBtn = document.getElementById('specNavRegBtn');
+  if (navBtn) navBtn.style.display = (USER_ROLE === 'spectator' && ST.registrationOpen) ? '' : 'none';
+  if (ST.page === 'REG') renderRegisterPage();
+}
+// Surveillance publique très légère : permet d'afficher le bouton "Inscrire mon
+// équipe" sur l'écran de connexion, avant même qu'un rôle (spectateur/staff) soit choisi.
+onSnapshot(doc(db, 'petanque', 'status'), snap => {
+  if (snap.exists()) { ST.registrationOpen = snap.data().registrationOpen === true; updateRegistrationUI(); }
+}, () => {});
 
 // ─── Firestore — abonnements ──────────────────────────────
 function subscribeToTournamentPublic() {
@@ -269,6 +286,8 @@ function applyTournamentData(data) {
   ST.activePoolRound = data.activePoolRound || 0;
   ST.activeBracketRound = data.activeBracketRound || { P: 0, C: 0 };
   handleLiveOpenChange(data.liveOpen === true);
+  ST.registrationOpen = data.registrationOpen === true;
+  updateRegistrationUI();
   refreshCurrentPage();
 }
 function normalizeResult(data) { return { ga: data.ga != null ? data.ga : '', gb: data.gb != null ? data.gb : '', bye: !!data.bye }; }
@@ -289,11 +308,12 @@ function refreshCurrentPage() {
   if (ST.page === 4) renderTournamentPage();
   if (ST.page === 5) renderFinalPage();
   if (ST.page === 'T') renderTeamsSpecPage();
+  if (ST.page === 'REG') renderRegisterPage();
   if (ST.page === 'TV') renderTVContent();
   updateLiveToggleBtn();
 }
 window.goTo = function(n) {
-  if (n !== 'R' && n !== 'T' && isLiveBlocked()) {
+  if (n !== 'R' && n !== 'T' && n !== 'REG' && isLiveBlocked()) {
     pendingSpecTarget = n;
     const overlay = document.getElementById('liveClosedOverlay');
     if (overlay) overlay.style.display = 'flex';
@@ -307,6 +327,12 @@ window.goTo = function(n) {
     document.getElementById('pageT').classList.add('active');
     renderTeamsSpecPage();
     document.querySelectorAll('.spec-nav-btn').forEach(b => b.classList.toggle('spec-nav-active', b.dataset.target === 'T'));
+    return;
+  }
+  if (n === 'REG') {
+    document.getElementById('pageREG').classList.add('active');
+    renderRegisterPage();
+    document.querySelectorAll('.spec-nav-btn').forEach(b => b.classList.toggle('spec-nav-active', b.dataset.target === 'REG'));
     return;
   }
   if (n === 'TV') {
@@ -350,7 +376,7 @@ function updateSteps(n) {
 }
 window.spectatorGoLive = async function(n) {
   try { const snap = await getDoc(doc(db, 'petanque', 'status')); if (snap.exists()) handleLiveOpenChange(snap.data().liveOpen === true); } catch (e) {}
-  if (n !== 'R' && n !== 'T' && isLiveBlocked()) {
+  if (n !== 'R' && n !== 'T' && n !== 'REG' && isLiveBlocked()) {
     pendingSpecTarget = n;
     const overlay = document.getElementById('liveClosedOverlay');
     if (overlay) overlay.style.display = 'flex';
@@ -710,14 +736,13 @@ window.buildBrackets = async function() {
   goTo(4);
 };
 function bracketMatchId(bracket, round, idx) { return 'br-' + bracket + '-r' + round + '-m' + idx; }
-function bracketPetiteId(bracket) { return 'br-' + bracket + '-pf'; }
 function bracketMatchTeams(bracket, round, idx) {
   const br = ST.brackets[bracket]; if (!br) return { a: null, b: null };
   if (round === 0) return { a: br.slots[idx * 2] ?? null, b: br.slots[idx * 2 + 1] ?? null };
   return { a: bracketWinner(bracket, round - 1, idx * 2), b: bracketWinner(bracket, round - 1, idx * 2 + 1) };
 }
 function getBracketResult(bracket, round, idx) {
-  const id = round === 'pf' ? bracketPetiteId(bracket) : bracketMatchId(bracket, round, idx);
+  const id = bracketMatchId(bracket, round, idx);
   const d = ST.results[id] || {};
   return { ga: d.ga != null ? d.ga : '', gb: d.gb != null ? d.gb : '', bye: !!d.bye };
 }
@@ -735,6 +760,119 @@ function bracketLoser(bracket, round, idx) {
   const r = getBracketResult(bracket, round, idx);
   if (r.ga === '' || r.gb === '') return null;
   return (+r.ga > +r.gb) ? b : a;
+}
+// ═══════════════════════════════════════════════════════════
+// SYSTÈME GÉNÉRIQUE DE CLASSEMENT COMPLET (perdants rejouent)
+// Chaque perdant (sauf le perdant de la toute dernière finale d'un
+// groupe, qui prend automatiquement la 2e place) rejoint un mini-
+// tableau formé avec les autres perdants de son tour, qui est lui
+// même classé par élimination directe + classement, de façon
+// récursive. Résultat : toutes les équipes jouent le même nombre
+// de matchs (= profondeur du tableau), perdants compris.
+// ═══════════════════════════════════════════════════════════
+function nodeMatchId(bracket, path, round, idx) {
+  if (!path.length) return bracketMatchId(bracket, round, idx);
+  return 'br-' + bracket + '-cl' + path.join('-') + '-r' + round + '-m' + idx;
+}
+function nodeMatchTeams(bracket, node, path, round, idx) {
+  if (!path.length) return bracketMatchTeams(bracket, round, idx);
+  if (round === 0) return { a: node.slots[idx * 2] ?? null, b: node.slots[idx * 2 + 1] ?? null };
+  return { a: nodeWinner(bracket, node, path, round - 1, idx * 2), b: nodeWinner(bracket, node, path, round - 1, idx * 2 + 1) };
+}
+function nodeResultOf(bracket, path, round, idx) {
+  if (!path.length) return getBracketResult(bracket, round, idx);
+  const id = nodeMatchId(bracket, path, round, idx);
+  const d = ST.results[id] || {};
+  return { ga: d.ga != null ? d.ga : '', gb: d.gb != null ? d.gb : '', bye: !!d.bye };
+}
+function nodeWinner(bracket, node, path, round, idx) {
+  if (!path.length) return bracketWinner(bracket, round, idx);
+  const { a, b } = nodeMatchTeams(bracket, node, path, round, idx);
+  if (a == null && b == null) return null;
+  if (a == null) return b; if (b == null) return a;
+  const r = nodeResultOf(bracket, path, round, idx);
+  if (r.ga === '' || r.gb === '') return null;
+  return (+r.ga > +r.gb) ? a : b;
+}
+function nodeLoser(bracket, node, path, round, idx) {
+  if (!path.length) return bracketLoser(bracket, round, idx);
+  const { a, b } = nodeMatchTeams(bracket, node, path, round, idx);
+  if (a == null || b == null) return null;
+  const r = nodeResultOf(bracket, path, round, idx);
+  if (r.ga === '' || r.gb === '') return null;
+  return (+r.ga > +r.gb) ? b : a;
+}
+function nodeRoundMatchCount(node, round) { return node.slots.length / Math.pow(2, round + 1); }
+function isMatchDone(bracket, node, path, round, idx) {
+  const { a, b } = nodeMatchTeams(bracket, node, path, round, idx);
+  if (a == null || b == null) return true;
+  const r = nodeResultOf(bracket, path, round, idx);
+  return r.ga !== '' && r.gb !== '';
+}
+function isNodeRoundDone(bracket, node, path, round) {
+  const n = nodeRoundMatchCount(node, round);
+  for (let idx = 0; idx < n; idx++) if (!isMatchDone(bracket, node, path, round, idx)) return false;
+  return true;
+}
+// Construit (à la volée, déterministe) le mini-tableau formé par les perdants
+// réels d'un tour donné d'un noeud. Retourne null tant que le tour n'est pas
+// terminé ou s'il n'y a aucun perdant réel (tour 100% exempts).
+function getLoserSubNode(bracket, node, path, round) {
+  if (round >= node.depth - 1) return null;
+  if (!isNodeRoundDone(bracket, node, path, round)) return null;
+  const n = nodeRoundMatchCount(node, round);
+  const losers = [];
+  for (let idx = 0; idx < n; idx++) { const l = nodeLoser(bracket, node, path, round, idx); if (l) losers.push({ teamId: l, groupId: null }); }
+  if (!losers.length) return null;
+  return buildBracketSeeds(losers);
+}
+// Classement complet (relatif 1..teamCount) d'un noeud, perdants inclus.
+function rankNode(bracket, node, path) {
+  if (!node || !node.teamCount) return [];
+  if (node.depth === 0) return node.autoWinner ? [{ teamId: node.autoWinner, place: 1 }] : [];
+  const out = []; let place = 1;
+  const fr = node.depth - 1;
+  const w = nodeWinner(bracket, node, path, fr, 0);
+  const l = nodeLoser(bracket, node, path, fr, 0);
+  if (w) { out.push({ teamId: w, place }); place++; }
+  if (l) { out.push({ teamId: l, place }); place++; }
+  for (let r = fr - 1; r >= 0; r--) {
+    const sub = getLoserSubNode(bracket, node, path, r);
+    if (sub) {
+      rankNode(bracket, sub, [...path, r]).forEach(x => out.push({ teamId: x.teamId, place: place + x.place - 1, tied: x.tied }));
+      place += sub.teamCount;
+    } else {
+      const n = nodeRoundMatchCount(node, r);
+      const losers = [];
+      for (let idx = 0; idx < n; idx++) { const lo = nodeLoser(bracket, node, path, r, idx); if (lo) losers.push(lo); }
+      if (losers.length) { losers.forEach(tid => out.push({ teamId: tid, place, tied: true })); place += losers.length; }
+    }
+  }
+  return out;
+}
+// Liste, pour chaque "tour global" (0..depth-1), tous les matchs à jouer
+// (tableau principal + tous les mini-tableaux de classement déjà formés).
+// Un mini-tableau né des perdants du tour g démarre au tour global g+1 —
+// si bien que toutes les équipes jouent exactement `depth` matchs au total.
+function collectGlobalRoundMatches(bracket) {
+  const br = ST.brackets[bracket];
+  const out = [];
+  if (!br || !br.teamCount || br.depth === 0) return out;
+  for (let g = 0; g < br.depth; g++) out.push([]);
+  (function walk(node, path, startGlobal) {
+    for (let j = 0; j < node.depth; j++) {
+      const g = startGlobal + j;
+      if (g < out.length) {
+        const n = nodeRoundMatchCount(node, j);
+        for (let idx = 0; idx < n; idx++) out[g].push({ node, path, round: j, idx });
+      }
+      if (j < node.depth - 1) {
+        const sub = getLoserSubNode(bracket, node, path, j);
+        if (sub) walk(sub, [...path, j], g + 1);
+      }
+    }
+  })(br, [], 0);
+  return out;
 }
 function bracketRoundName(depth, round) {
   const remaining = depth - round;
@@ -755,9 +893,10 @@ function isBracketRoundDone(bracket, round) {
   }
   return true;
 }
-window.setBracketResult = async function(bracket, round, idx, f, v) {
+window.setNodeResult = async function(bracket, pathStr, round, idx, f, v) {
   if (!isScorer()) return;
-  const id = round === 'pf' ? bracketPetiteId(bracket) : bracketMatchId(bracket, round, idx);
+  const path = pathStr ? pathStr.split('-').map(Number) : [];
+  const id = nodeMatchId(bracket, path, round, idx);
   const cur = ST.results[id] || { ga: '', gb: '' };
   cur[f] = v === '' ? '' : Math.max(0, Math.min(ST.cfg.scoreMax + 5, +v));
   ST.results[id] = cur;
@@ -776,70 +915,13 @@ function updateBuildBracketsBtn() {
 // CLASSEMENT FINAL
 // ═══════════════════════════════════════════════════════════
 function computeFinalRanking() {
-  const ranking = []; let place = 1;
+  const ranking = []; let baseOffset = 0;
   ['P', 'C'].forEach(bk => {
     const br = ST.brackets[bk]; if (!br || !br.teamCount) return;
     const label = bk === 'P' ? 'Principale' : 'Consolante';
-    if (br.depth === 0) { if (br.autoWinner) { ranking.push({ place, teamId: br.autoWinner, label }); place++; } return; }
-    const depth = br.depth;
-    const winner   = bracketWinner(bk, depth - 1, 0);
-    const finalist = bracketLoser(bk, depth - 1, 0);
-    if (winner)   { ranking.push({ place, teamId: winner, label });   place++; }
-    if (finalist) { ranking.push({ place, teamId: finalist, label }); place++; }
-    if (depth >= 2) {
-      const l0 = bracketLoser(bk, depth - 2, 0), l1 = bracketLoser(bk, depth - 2, 1);
-      if (l0 && l1) {
-        const pf = getBracketResult(bk, 'pf');
-        if (pf.ga !== '' && pf.gb !== '') {
-          const w3 = (+pf.ga > +pf.gb) ? l0 : l1, l4 = (+pf.ga > +pf.gb) ? l1 : l0;
-          ranking.push({ place, teamId: w3, label }); place++;
-          ranking.push({ place, teamId: l4, label }); place++;
-        } else {
-          ranking.push({ place, teamId: l0, label, tied: true });
-          ranking.push({ place, teamId: l1, label, tied: true });
-          place += 2;
-        }
-      }
-    }
-    if (depth >= 3) {
-      const w0 = classifSemiWinner(bk, 0), w1 = classifSemiWinner(bk, 1);
-      const lo0 = classifSemiLoser(bk, 0), lo1 = classifSemiLoser(bk, 1);
-      if (w0 && w1) {
-        const rf = classifResult(bk, 'f1', 0);
-        if (rf.ga !== '' && rf.gb !== '') {
-          const w5 = (+rf.ga > +rf.gb) ? w0 : w1, l6 = (+rf.ga > +rf.gb) ? w1 : w0;
-          ranking.push({ place, teamId: w5, label }); place++;
-          ranking.push({ place, teamId: l6, label }); place++;
-        } else {
-          ranking.push({ place, teamId: w0, label, tied: true });
-          ranking.push({ place, teamId: w1, label, tied: true });
-          place += 2;
-        }
-      }
-      if (lo0 && lo1) {
-        const rsf = classifResult(bk, 'f2', 0);
-        if (rsf.ga !== '' && rsf.gb !== '') {
-          const w7 = (+rsf.ga > +rsf.gb) ? lo0 : lo1, l8 = (+rsf.ga > +rsf.gb) ? lo1 : lo0;
-          ranking.push({ place, teamId: w7, label }); place++;
-          ranking.push({ place, teamId: l8, label }); place++;
-        } else {
-          ranking.push({ place, teamId: lo0, label, tied: true });
-          ranking.push({ place, teamId: lo1, label, tied: true });
-          place += 2;
-        }
-      }
-      if (!w0 && !w1 && !lo0 && !lo1) {
-        const round = classifQuartRound(bk);
-        const n = bracketRoundMatchCount(bk, round);
-        for (let idx = 0; idx < n; idx++) { const l = bracketLoser(bk, round, idx); if (l) { ranking.push({ place, teamId: l, label, tied: true }); place++; } }
-      }
-    }
-    for (let rd = depth - 4; rd >= 0; rd--) {
-      const n = bracketRoundMatchCount(bk, rd);
-      const losers = [];
-      for (let idx = 0; idx < n; idx++) { const l = bracketLoser(bk, rd, idx); if (l) losers.push(l); }
-      if (losers.length) { losers.forEach(tid => ranking.push({ place, teamId: tid, label, tied: true })); place += losers.length; }
-    }
+    const ranked = rankNode(bk, br, []).sort((a, b) => a.place - b.place);
+    ranked.forEach(r => ranking.push({ place: baseOffset + r.place, teamId: r.teamId, label, tied: r.tied }));
+    baseOffset += br.teamCount;
   });
   return ranking;
 }
@@ -947,128 +1029,52 @@ function renderPoolStandingsPanel() {
       </div>`;
     }).join('') + `</div>`;
 }
-function bracketMatchCardHTML(bracket, round, idx) {
-  const { a, b } = bracketMatchTeams(bracket, round, idx);
-  const isByeMatch = (a == null) !== (b == null);
-  if (isByeMatch) {
+function nodeMatchCardHTML(bracket, node, path, round, idx) {
+  const { a, b } = nodeMatchTeams(bracket, node, path, round, idx);
+  const isCons = path.length > 0;
+  const pathStr = path.join('-');
+  const roundLabel = bracketRoundName(node.depth, round);
+  const titlePrefix = isCons ? '🥈 Match de classement · ' : '';
+  if ((a == null) !== (b == null)) {
     const winner = a ?? b;
     return `<div style="background:var(--ylw-bg);border:1px dashed var(--ylw);border-radius:10px;padding:10px 14px;margin-bottom:8px">
-      <div style="font-size:11px;color:var(--muted)">${bracketRoundName(ST.brackets[bracket].depth, round)} · Match ${idx + 1}</div>
+      <div style="font-size:11px;color:var(--muted)">${titlePrefix}${roundLabel} · Match ${idx + 1}</div>
       <div style="font-weight:700;margin-top:4px">🟡 ${tName(winner)} qualifié(e) directement (exempt)</div>
     </div>`;
   }
   if (a == null && b == null) return '';
-  const r = getBracketResult(bracket, round, idx);
+  const r = nodeResultOf(bracket, path, round, idx);
   const done = r.ga !== '' && r.gb !== '';
   const ecartOk = done && Math.abs(+r.ga - +r.gb) >= ST.cfg.ecart;
   const warn = done && !ecartOk ? `<span style="color:var(--ylw);font-size:11px"> ⚠ écart < ${ST.cfg.ecart} pts</span>` : '';
-  const isQuart = classifQuartRound(bracket) === round;
-  const hint = isQuart ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">➜ Gagnant : demi-finale · Perdant : places à jouer 5-8</div>` : '';
-  return `<div style="background:var(--s1);border:1px solid ${done?(ecartOk?'var(--grn)':'var(--ylw)'):'var(--bdr)'};border-radius:10px;padding:10px 14px;margin-bottom:8px">
-    <div style="font-size:11px;color:var(--muted);display:flex;justify-content:space-between">${bracketRoundName(ST.brackets[bracket].depth, round)} · Match ${idx + 1}${warn}</div>
+  const willContinue = round < node.depth - 1;
+  const hint = isCons
+    ? (willContinue ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">➜ Gagnant et perdant continuent tous les deux en classement</div>`
+                     : `<div style="font-size:10px;color:var(--muted);margin-top:4px">🏅 Ce match attribue 2 places au classement final</div>`)
+    : (willContinue ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">➜ Gagnant : tour suivant · Perdant : continue en classement</div>` : '');
+  const setA = `setNodeResult('${bracket}','${pathStr}',${round},${idx},'ga',this.value)`;
+  const setB = `setNodeResult('${bracket}','${pathStr}',${round},${idx},'gb',this.value)`;
+  return `<div style="background:var(--s1);border:1px solid ${isCons ? 'var(--brand2)' : (done ? (ecartOk ? 'var(--grn)' : 'var(--ylw)') : 'var(--bdr)')};border-radius:10px;padding:10px 14px;margin-bottom:8px">
+    <div style="font-size:11px;color:${isCons ? 'var(--brand2)' : 'var(--muted)'};display:flex;justify-content:space-between">${titlePrefix}${roundLabel} · Match ${idx + 1}${warn}</div>
     <div style="display:flex;align-items:center;gap:10px;margin-top:6px">
       <div style="flex:1;font-weight:600">${tName(a)}</div>
-      ${scoreInputHTML(r.ga, r.gb,
-        `setBracketResult('${bracket}',${round === 'pf' ? `'pf'` : round},${idx},'ga',this.value)`,
-        `setBracketResult('${bracket}',${round === 'pf' ? `'pf'` : round},${idx},'gb',this.value)`,
-        !isScorer())}
+      ${scoreInputHTML(r.ga, r.gb, setA, setB, !isScorer())}
       <div style="flex:1;font-weight:600;text-align:right">${tName(b)}</div>
     </div>
     ${hint}
   </div>`;
 }
-function petiteFinaleCardHTML(bracket) {
-  const br = ST.brackets[bracket]; if (!br || br.depth < 2) return '';
-  const a = bracketLoser(bracket, br.depth - 2, 0), b = bracketLoser(bracket, br.depth - 2, 1);
-  if (!a || !b) return '<div class="info info-b">La petite finale (3e place) sera disponible une fois les demi-finales terminées.</div>';
-  const r = getBracketResult(bracket, 'pf');
-  const done = r.ga !== '' && r.gb !== '';
-  return `<div style="background:var(--s1);border:2px solid var(--ylw);border-radius:10px;padding:10px 14px;margin-bottom:8px">
-    <div style="font-size:11px;color:var(--ylw);font-weight:700">🥉 PETITE FINALE — 3e / 4e place</div>
-    <div style="display:flex;align-items:center;gap:10px;margin-top:6px">
-      <div style="flex:1;font-weight:600">${tName(a)}</div>
-      ${scoreInputHTML(r.ga, r.gb, `setBracketResult('${bracket}','pf',0,'ga',this.value)`, `setBracketResult('${bracket}','pf',0,'gb',this.value)`, !isScorer())}
-      <div style="flex:1;font-weight:600;text-align:right">${tName(b)}</div>
-    </div>
-  </div>`;
-}
-// ── Matchs de classement (places à jouer) pour les perdants de quart de finale ──
-// Concerne les tableaux dont la profondeur est ≥ 3 (8 équipes et plus). Les 4 perdants
-// des quarts s'affrontent en 2 demi-finales classement, puis le match pour la 5e place
-// (gagnants des demi classement) et le match pour la 7e place (perdants des demi classement).
-function classifQuartRound(bracket) {
-  const br = ST.brackets[bracket]; if (!br || br.depth < 3) return null;
-  return br.depth - 3; // index du tour "Quart de finale"
-}
-function classifMatchId(bracket, sub, idx) { return 'br-' + bracket + '-cl-' + sub + '-m' + idx; }
-function classifSemiTeams(bracket, idx) {
-  const round = classifQuartRound(bracket); if (round == null) return { a: null, b: null };
-  const losers = [bracketLoser(bracket, round, 0), bracketLoser(bracket, round, 1), bracketLoser(bracket, round, 2), bracketLoser(bracket, round, 3)];
-  return { a: losers[idx * 2] ?? null, b: losers[idx * 2 + 1] ?? null };
-}
-function classifResult(bracket, sub, idx) {
-  const id = classifMatchId(bracket, sub, idx);
-  const d = ST.results[id] || {};
-  return { ga: d.ga != null ? d.ga : '', gb: d.gb != null ? d.gb : '' };
-}
-function classifSemiWinner(bracket, idx) {
-  const { a, b } = classifSemiTeams(bracket, idx); if (!a || !b) return null;
-  const r = classifResult(bracket, 'demi', idx); if (r.ga === '' || r.gb === '') return null;
-  return (+r.ga > +r.gb) ? a : b;
-}
-function classifSemiLoser(bracket, idx) {
-  const { a, b } = classifSemiTeams(bracket, idx); if (!a || !b) return null;
-  const r = classifResult(bracket, 'demi', idx); if (r.ga === '' || r.gb === '') return null;
-  return (+r.ga > +r.gb) ? b : a;
-}
-window.setClassifResult = async function(bracket, sub, idx, f, v) {
-  if (!isScorer()) return;
-  const id = classifMatchId(bracket, sub, idx);
-  const cur = ST.results[id] || { ga: '', gb: '' };
-  cur[f] = v === '' ? '' : Math.max(0, Math.min(ST.cfg.scoreMax + 5, +v));
-  ST.results[id] = cur;
-  await saveResult(id, cur.ga, cur.gb, false);
-  refreshCurrentPage();
-};
-function classifMiniCardHTML(bracket, title, color, a, b, sub, idx, waitTxt) {
-  if (!a || !b) return `<div class="info info-b">${waitTxt}</div>`;
-  const r = classifResult(bracket, sub, idx);
-  return `<div style="background:var(--s1);border:2px solid ${color};border-radius:10px;padding:10px 14px;margin-bottom:8px">
-    <div style="font-size:11px;color:${color};font-weight:700">${title}</div>
-    <div style="display:flex;align-items:center;gap:10px;margin-top:6px">
-      <div style="flex:1;font-weight:600">${tName(a)}</div>
-      ${scoreInputHTML(r.ga, r.gb, `setClassifResult('${bracket}','${sub}',${idx},'ga',this.value)`, `setClassifResult('${bracket}','${sub}',${idx},'gb',this.value)`, !isScorer())}
-      <div style="flex:1;font-weight:600;text-align:right">${tName(b)}</div>
-    </div>
-  </div>`;
-}
-function classifCardsHTML(bracket) {
-  const round = classifQuartRound(bracket); if (round == null) return '';
-  let html = '';
-  for (let idx = 0; idx < 2; idx++) {
-    const { a, b } = classifSemiTeams(bracket, idx);
-    html += classifMiniCardHTML(bracket, `🏅 DEMI-FINALE CLASSEMENT (places 5 à 8) · Match ${idx + 1}`, 'var(--brand2)', a, b, 'demi', idx,
-      'Demi-finale classement en attente des résultats des quarts de finale.');
-  }
-  const w0 = classifSemiWinner(bracket, 0), w1 = classifSemiWinner(bracket, 1);
-  html += classifMiniCardHTML(bracket, '🏅 MATCH POUR LA 5e PLACE', 'var(--brand)', w0, w1, 'f1', 0,
-    'Match pour la 5e place disponible une fois les demi-finales classement terminées.');
-  const l0 = classifSemiLoser(bracket, 0), l1 = classifSemiLoser(bracket, 1);
-  html += classifMiniCardHTML(bracket, '🏅 MATCH POUR LA 7e PLACE', 'var(--ylw)', l0, l1, 'f2', 0,
-    'Match pour la 7e place disponible une fois les demi-finales classement terminées.');
-  return html;
-}
 function renderBracketRoundTabs(bracket) {
   const el = document.getElementById('bracketRoundTabs_' + bracket); if (!el) return;
   const br = ST.brackets[bracket]; if (!br) { el.innerHTML = ''; return; }
   if (br.depth === 0) { el.innerHTML = '<div class="info info-b">Une seule équipe dans ce tableau.</div>'; return; }
+  const rounds = collectGlobalRoundMatches(bracket);
   let html = '';
-  for (let rd = 0; rd < br.depth; rd++) {
-    const done = isBracketRoundDone(bracket, rd);
-    html += `<button class="rtab ${ST.activeBracketRound[bracket] === rd ? 'rtab-active' : ''}" onclick="setBracketRound('${bracket}',${rd})">${bracketRoundName(br.depth, rd)} ${done ? '✓' : ''}</button>`;
+  for (let g = 0; g < br.depth; g++) {
+    const matches = rounds[g] || [];
+    const done = matches.length > 0 && matches.every(m => isMatchDone(bracket, m.node, m.path, m.round, m.idx));
+    html += `<button class="rtab ${ST.activeBracketRound[bracket] === g ? 'rtab-active' : ''}" onclick="setBracketRound('${bracket}',${g})">Tour ${g + 1} ${done ? '✓' : ''}</button>`;
   }
-  if (br.depth >= 2) html += `<button class="rtab ${ST.activeBracketRound[bracket] === 'pf' ? 'rtab-active' : ''}" onclick="setBracketRound('${bracket}','pf')">🥉 Petite finale</button>`;
-  if (br.depth >= 3) html += `<button class="rtab ${ST.activeBracketRound[bracket] === 'cl' ? 'rtab-active' : ''}" onclick="setBracketRound('${bracket}','cl')">🏅 Places à jouer 5-8</button>`;
   el.innerHTML = html;
 }
 window.setBracketRound = async function(bracket, rd) {
@@ -1085,10 +1091,11 @@ function renderBracketColumn(bracket, title) {
   if (br.depth === 0) {
     body = `<div class="info info-g">🏆 ${tName(br.autoWinner)} — championne automatique du tableau ${title}.</div>`;
   } else {
-    const rd = ST.activeBracketRound[bracket];
-    if (rd === 'pf') body = petiteFinaleCardHTML(bracket);
-    else if (rd === 'cl') body = classifCardsHTML(bracket);
-    else { const n = bracketRoundMatchCount(bracket, rd); for (let idx = 0; idx < n; idx++) body += bracketMatchCardHTML(bracket, rd, idx); }
+    const g = Math.min(Math.max(0, ST.activeBracketRound[bracket] || 0), br.depth - 1);
+    const rounds = collectGlobalRoundMatches(bracket);
+    const matches = (rounds[g] || []).slice().sort((m1, m2) => (m1.path.length - m2.path.length) || (m1.idx - m2.idx));
+    if (!matches.length) body = '<div class="info info-b">Aucun match à ce tour pour le moment (en attente des résultats du tour précédent).</div>';
+    else body = matches.map(m => nodeMatchCardHTML(bracket, m.node, m.path, m.round, m.idx)).join('');
   }
   const listEl = document.getElementById('bracketMatchList_' + bracket);
   if (listEl) listEl.innerHTML = body || '<div class="info info-b">Rien à afficher.</div>';
@@ -1352,31 +1359,30 @@ function getTVScreens() {
     const br = ST.brackets[bk]; if (!br || !br.teamCount) return;
     const label = bk === 'P' ? 'Principale' : 'Consolante';
     if (br.depth === 0) { screens.push({ key: 'auto-' + bk, kind: 'matches', title: `🏆 ${label}`, render: () => `<div class="tv-empty">${tName(br.autoWinner)} championne automatique.</div>` }); return; }
+    const rounds = collectGlobalRoundMatches(bk);
     let firstUnfinished = -1;
-    for (let rd = 0; rd < br.depth; rd++) { if (!isBracketRoundDone(bk, rd)) { firstUnfinished = rd; break; } }
+    for (let g = 0; g < br.depth; g++) {
+      const ms = rounds[g] || [];
+      if (!ms.length) continue;
+      if (!ms.every(m => isMatchDone(bk, m.node, m.path, m.round, m.idx))) { firstUnfinished = g; break; }
+    }
     const roundsToShow = firstUnfinished === -1 ? [br.depth - 1] : [firstUnfinished];
-    roundsToShow.forEach(rd => {
-      const n = bracketRoundMatchCount(bk, rd);
+    roundsToShow.forEach(g => {
+      const ms = rounds[g] || [];
       const flat = [];
-      for (let idx = 0; idx < n; idx++) {
-        const { a, b } = bracketMatchTeams(bk, rd, idx);
-        if (a == null && b == null) continue;
-        const r = getBracketResult(bk, rd, idx);
-        flat.push({ label: label + ' · ' + bracketRoundName(br.depth, rd) + ' · M' + (idx + 1), time: '', aId: a, bId: b, r, done: (r.ga !== '' && r.gb !== '') || r.bye, isLive: rd === ST.activeBracketRound[bk] });
-      }
+      ms.forEach(m => {
+        const { a, b } = nodeMatchTeams(bk, m.node, m.path, m.round, m.idx);
+        if (a == null && b == null) return;
+        const r = nodeResultOf(bk, m.path, m.round, m.idx);
+        const tag = m.path.length > 0 ? '🥈 Classement · ' : '';
+        flat.push({ label: label + ' · ' + tag + bracketRoundName(m.node.depth, m.round) + ' · M' + (m.idx + 1), time: '', aId: a, bId: b, r, done: (r.ga !== '' && r.gb !== '') || r.bye, isLive: g === ST.activeBracketRound[bk] });
+      });
       const pageCount = Math.max(1, Math.ceil(flat.length / TV_PAGE_SIZE));
       for (let i = 0; i < pageCount; i++) {
         const page = flat.slice(i * TV_PAGE_SIZE, (i + 1) * TV_PAGE_SIZE);
-        screens.push({ key: 'br-' + bk + '-r' + rd + '-' + i, kind: 'matches', title: pageCount > 1 ? `🏆 ${label} · ${bracketRoundName(br.depth, rd)} (${i + 1}/${pageCount})` : `🏆 ${label} · ${bracketRoundName(br.depth, rd)}`, render: () => tvMatchGridHTML(page) });
+        screens.push({ key: 'br-' + bk + '-g' + g + '-' + i, kind: 'matches', title: pageCount > 1 ? `🏆 ${label} · Tour ${g + 1} (${i + 1}/${pageCount})` : `🏆 ${label} · Tour ${g + 1}`, render: () => tvMatchGridHTML(page) });
       }
     });
-    if (firstUnfinished === -1 && br.depth >= 2) {
-      const a = bracketLoser(bk, br.depth - 2, 0), b = bracketLoser(bk, br.depth - 2, 1);
-      if (a && b) {
-        const r = getBracketResult(bk, 'pf');
-        screens.push({ key: 'pf-' + bk, kind: 'matches', title: `🥉 ${label} · Petite Finale`, render: () => tvMatchGridHTML([{ label: 'Petite finale', time: '', aId: a, bId: b, r, done: r.ga !== '' && r.gb !== '', isLive: true }]) });
-      }
-    }
   });
   screens.push({ key: 'final-rank', kind: 'standings', title: '🥇 Classement Final', render: tvFinalRankingHTML });
   return screens;
@@ -1565,10 +1571,16 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
     <input type="password" id="loginPassInput" placeholder="Mot de passe" onkeydown="if(event.key==='Enter')loginEmail()">
     <button class="btn btn-b" style="width:100%" onclick="loginEmail()">Se connecter</button>
     <div class="login-divider">ou accès public</div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+      <button onclick="enterLiveModeAndGo(4)" style="padding:13px 6px;background:rgba(255,80,60,.12);border:1.5px solid rgba(255,120,90,.45);border-radius:10px;color:#ffb199;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:6px;grid-column:1 / -1"><span class="spec-nav-live-dot"></span> 🔴 Suivre le direct</button>
+    </div>
     <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
       <button onclick="enterLiveModeAndGo('T')"  style="padding:13px 6px;background:rgba(255,255,255,.08);border:1.5px solid rgba(255,200,150,.3);border-radius:10px;color:#ffdcb8;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:5px">👥 ÉQUIPES</button>
       <button onclick="enterLiveModeAndGo('R')"  style="padding:13px 6px;background:rgba(255,255,255,.08);border:1.5px solid rgba(255,200,150,.3);border-radius:10px;color:#ffdcb8;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:5px">📋 RÈGLEMENT</button>
       <button onclick="enterLiveModeAndGo('TV')" style="padding:13px 6px;background:rgba(255,255,255,.08);border:1.5px solid rgba(255,200,150,.3);border-radius:10px;color:#ffdcb8;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:5px">📺 ÉCRAN</button>
+    </div>
+    <div id="loginRegisterBox" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.15);text-align:center">
+      <button onclick="enterLiveModeAndGo('REG')" style="width:100%;padding:13px 6px;background:rgba(120,200,120,.12);border:1.5px solid rgba(140,220,140,.4);border-radius:10px;color:#bdf2bd;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase">📝 Inscrire mon équipe</button>
     </div>
   </div>
 </div>
@@ -1646,6 +1658,7 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
   <button class="spec-nav-btn spec-nav-active" data-target="4" onclick="spectatorGoLive(4)"><span class="spec-nav-live-dot"></span> Live</button>
   <button class="spec-nav-btn" data-target="5" onclick="spectatorGoLive(5)">🏆 Classement</button>
   <button class="spec-nav-btn" data-target="T" onclick="spectatorGoLive('T')">👥 Équipes</button>
+  <button class="spec-nav-btn" id="specNavRegBtn" data-target="REG" style="display:none" onclick="spectatorGoLive('REG')">📝 Inscription</button>
   <button class="spec-nav-btn" data-target="TV" onclick="spectatorGoLive('TV')">📺 Écran</button>
   <button class="spec-nav-btn" onclick="toggleRules()">📋 Règlement</button>
   <button class="spec-nav-btn" onclick="logout()" style="margin-left:auto;color:var(--red)">🔑 Connexion Staff</button>
@@ -1712,7 +1725,7 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
       <strong>Phase 1 — Poules de 4 :</strong> chaque équipe affronte toutes les autres de son groupe. Score max <span id="ruleScoreMax">13</span> pts avec <span id="ruleEcart">2</span> pts d'écart minimum.<br>
       <strong>Tiebreakers :</strong> 1) Victoires · 2) Confrontation directe · 3) Goal-average général · 4) Points marqués.<br>
       <strong>Phase 2 — Qualification :</strong> les 1ers et 2es de chaque groupe → tableau <strong>Principale</strong> ; les 3es et 4es → tableau <strong>Consolante</strong>. Répartition intelligente pour éviter les affiches déjà jouées en poule dès le 1er tour.<br>
-      <strong>Phase 2 — Élimination directe :</strong> 1/8, 1/4, demi-finale, finale (selon l'effectif), avec petite finale (3e/4e place) dans chaque tableau.<br>
+      <strong>Phase 2 — Élimination directe avec classement complet :</strong> 1/8, 1/4, demi-finale, finale (selon l'effectif). Chaque équipe battue rejoint un mini-tableau de classement avec les autres perdantes de son tour : toutes les équipes jouent ainsi le même nombre de matchs jusqu'au classement complet 1 → dernière place.<br>
       <strong>Classement final :</strong> tableau Principale en tête, puis Consolante.
     </div>
   </div>
@@ -1798,6 +1811,14 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
 </div>
 </div>
 
+<!-- ══ PAGE REG — INSCRIPTION PUBLIQUE D'UNE ÉQUIPE ══ -->
+<div class="page" id="pageREG">
+<div class="wrap">
+  <div class="sec-ttl">📝 Inscrire mon équipe</div>
+  <div id="regPageBody"></div>
+</div>
+</div>
+
 <!-- ══ PAGE TV — GRAND ÉCRAN ══ -->
 <div class="page" id="pageTV">
   <div class="tv-hdr">
@@ -1859,7 +1880,7 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
       <strong>Phase 1 — Poules de 4 :</strong> chaque équipe rencontre toutes les autres de son groupe en aller simple.<br><br>
       <strong>Classement de poule :</strong> 1) Victoires (2 pts/victoire) · 2) Confrontation directe (en cas d'ex-æquo) · 3) Goal-average général · 4) Points marqués.<br><br>
       <strong>Phase 2 — Qualification :</strong> les 2 premiers de chaque groupe → tableau <strong>Principale</strong> ; les équipes classées 3e et au-delà → tableau <strong>Consolante</strong>. La répartition dans les tableaux évite les confrontations rematch du 1er tour.<br><br>
-      <strong>Phase 2 — Élimination directe :</strong> 1/8, 1/4, demi-finale, finale (selon effectif). Une petite finale dispute la 3e/4e place de chaque tableau.<br><br>
+      <strong>Phase 2 — Élimination directe avec classement complet :</strong> 1/8, 1/4, demi-finale, finale (selon effectif). Chaque équipe battue rejoint un mini-tableau de classement avec les autres équipes éliminées au même tour, lui-même joué par élimination directe. Résultat : toutes les équipes — gagnantes comme perdantes — jouent le même nombre de matchs, et le classement final va de la 1ère à la dernière place.<br><br>
       <strong>Classement final :</strong> le tableau Principale détermine les places 1 à N, le tableau Consolante complète le classement.
     </div>
   </div>
