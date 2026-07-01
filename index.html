@@ -170,6 +170,18 @@ window.logout = async function() {
   USER_ROLE = 'spectator'; CURRENT_USER = null;
   showLogin();
 };
+// Fermeture instantanée (utilisée quand on quitte l'onglet / l'appli) : on
+// remet l'écran de connexion tout de suite, de façon synchrone, avant même
+// que la déconnexion Firebase ne soit terminée — pour garantir que la page
+// admin ne reste jamais visible si l'appareil est mis en veille juste après
+// avoir changé d'onglet ou d'application.
+function instantLockAdmin() {
+  unsubAll();
+  clearStaffActive();
+  USER_ROLE = 'spectator'; CURRENT_USER = null;
+  showLogin();
+  signOut(auth).catch(() => {});
+}
 function unsubAll() {
   if (unsubTournament) { unsubTournament(); unsubTournament = null; }
   if (unsubResults)    { unsubResults();    unsubResults = null; }
