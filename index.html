@@ -296,7 +296,7 @@ function handleLiveOpenChange(nowOpen) {
   if (nowOpen) {
     if (overlay) overlay.style.display = 'none';
     if (pendingSpecTarget) { const t = pendingSpecTarget; pendingSpecTarget = null; goTo(t); }
-  } else if (USER_ROLE === 'spectator' && overlay && !LIVE_FREE_PAGES.includes(ST.page)) {
+  } else if (USER_ROLE === 'spectator' && overlay && !ST.rulesOpen && !LIVE_FREE_PAGES.includes(ST.page)) {
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
     overlay.style.display = 'flex';
   }
@@ -506,6 +506,7 @@ window.toggleRules = function() {
   ST.rulesOpen = !ST.rulesOpen;
   const el = document.getElementById('rulesModal');
   if (el) el.style.display = ST.rulesOpen ? 'flex' : 'none';
+  if (!ST.rulesOpen) handleLiveOpenChange(ST.liveOpen); // ré-applique immédiatement le verrou si besoin, sans attendre le prochain signal Firestore
 };
 
 // ═══════════════════════════════════════════════════════════
