@@ -200,19 +200,26 @@ window.enterLiveModeAndGo = async function(target) {
   subscribeToTournamentPublic();
   subscribeToResultsPublic();
   startLiveWatch();
+  // applyRoleUI() peut avoir tenté une navigation par défaut (bloquée si le live
+  // est fermé) et affiché l'overlay avant même qu'on sache où l'utilisateur veut
+  // vraiment aller : on nettoie ça avant la navigation explicite ci-dessous.
+  pendingSpecTarget = null;
+  const overlayEl = document.getElementById('liveClosedOverlay');
+  if (overlayEl) overlayEl.style.display = 'none';
   if (target === 'TV') goTo('TV');
   else if (target === 'T') goTo('T');
   else if (target === 'REG') goTo('REG');
   else if (target === 'R') { goTo(4); toggleRules(); }
   else if (target === 4) goTo(4);
 };
+const LIVE_FREE_PAGES = ['R', 'T', 'REG', 'TV'];
 function handleLiveOpenChange(nowOpen) {
   ST.liveOpen = nowOpen;
   const overlay = document.getElementById('liveClosedOverlay');
   if (nowOpen) {
     if (overlay) overlay.style.display = 'none';
     if (pendingSpecTarget) { const t = pendingSpecTarget; pendingSpecTarget = null; goTo(t); }
-  } else if (USER_ROLE === 'spectator' && overlay && ST.page !== 'R') {
+  } else if (USER_ROLE === 'spectator' && overlay && !LIVE_FREE_PAGES.includes(ST.page)) {
     overlay.style.display = 'flex';
   }
 }
@@ -316,7 +323,7 @@ function refreshCurrentPage() {
   updateRegistrationToggleBtn();
 }
 window.goTo = function(n) {
-  if (n !== 'R' && n !== 'T' && n !== 'REG' && isLiveBlocked()) {
+  if (!LIVE_FREE_PAGES.includes(n) && isLiveBlocked()) {
     pendingSpecTarget = n;
     const overlay = document.getElementById('liveClosedOverlay');
     if (overlay) overlay.style.display = 'flex';
@@ -379,7 +386,7 @@ function updateSteps(n) {
 }
 window.spectatorGoLive = async function(n) {
   try { const snap = await getDoc(doc(db, 'petanque', 'status')); if (snap.exists()) handleLiveOpenChange(snap.data().liveOpen === true); } catch (e) {}
-  if (n !== 'R' && n !== 'T' && n !== 'REG' && isLiveBlocked()) {
+  if (!LIVE_FREE_PAGES.includes(n) && isLiveBlocked()) {
     pendingSpecTarget = n;
     const overlay = document.getElementById('liveClosedOverlay');
     if (overlay) overlay.style.display = 'flex';
@@ -877,6 +884,48 @@ function collectGlobalRoundMatches(bracket) {
   })(br, [], 0);
   return out;
 }
+// ── Places en jeu (calcul exact, sans ambiguïté) ──
+// Seul le tout dernier groupe (perdants du tout premier tour) peut être
+// réduit par des exempts ; tous les autres groupes ont une taille idéale
+// fixe qui ne dépend que de la profondeur du tableau, donc on peut annoncer
+// les places en jeu dès qu'un match existe, sans attendre la fin du tableau.
+function idealGroupSizes(depth, teamCount) {
+  if (depth <= 0) return [Math.max(1, teamCount)];
+  if (depth === 1) return [teamCount];
+  const sizes = [2]; let sum = 2;
+  for (let r = depth - 2; r >= 1; r--) { const s = Math.pow(2, depth - 1 - r); sizes.push(s); sum += s; }
+  sizes.push(Math.max(0, teamCount - sum));
+  return sizes;
+}
+function computeAbsolutePlaceOffset(bracket, path) {
+  let node = ST.brackets[bracket], nodePath = [], offset = 0;
+  for (let i = 0; i < path.length; i++) {
+    const r = path[i];
+    const sizes = idealGroupSizes(node.depth, node.teamCount);
+    const k = node.depth - 1 - r;
+    for (let j = 0; j < k && j < sizes.length; j++) offset += sizes[j];
+    const sub = getLoserSubNode(bracket, node, nodePath, r);
+    if (!sub) return offset;
+    node = sub; nodePath = [...nodePath, r];
+  }
+  return offset;
+}
+// Renvoie ce qui se joue lors du match (bracket,node,path,round) :
+// - si c'est le dernier tour du noeud : les 2 (ou 1) places qu'il attribue directement.
+// - sinon : la fourchette de places garantie au perdant, et la meilleure fourchette
+//   encore accessible au gagnant.
+function nodePlaceStakes(bracket, node, path, round) {
+  const offset = computeAbsolutePlaceOffset(bracket, path);
+  if (round === node.depth - 1) {
+    const lo = offset + 1, hi = offset + Math.min(2, node.teamCount);
+    return { isFinal: true, lo, hi };
+  }
+  const sizes = idealGroupSizes(node.depth, node.teamCount);
+  const k = node.depth - 1 - round;
+  let before = 0; for (let j = 0; j < k; j++) before += sizes[j] || 0;
+  const subSize = sizes[k] || 0;
+  return { isFinal: false, winnerLo: offset + 1, winnerHi: offset + before, loserLo: offset + before + 1, loserHi: offset + before + subSize };
+}
 function bracketRoundName(depth, round) {
   const remaining = depth - round;
   const names = { 1: 'Finale', 2: 'Demi-finale', 3: 'Quart de finale', 4: '8e de finale', 5: '16e de finale', 6: '32e de finale' };
@@ -1032,17 +1081,27 @@ function renderPoolStandingsPanel() {
       </div>`;
     }).join('') + `</div>`;
 }
+function placeStakesBadgeHTML(stakes) {
+  if (stakes.isFinal) {
+    const txt = stakes.lo === stakes.hi ? `Place ${stakes.lo}` : `Places ${stakes.lo}-${stakes.hi}`;
+    return `<span style="font-weight:700;color:var(--brand)">🎯 ${txt}</span>`;
+  }
+  return `<span style="font-weight:600">🎯 Gagnant → places 1-${stakes.winnerHi} · Perdant → places ${stakes.loserLo}-${stakes.loserHi}</span>`;
+}
 function nodeMatchCardHTML(bracket, node, path, round, idx) {
   const { a, b } = nodeMatchTeams(bracket, node, path, round, idx);
   const isCons = path.length > 0;
   const pathStr = path.join('-');
   const roundLabel = bracketRoundName(node.depth, round);
-  const titlePrefix = isCons ? '🥈 Match de classement · ' : '';
+  const titlePrefix = isCons ? '🥈 ' : '';
+  const stakes = nodePlaceStakes(bracket, node, path, round);
+  const stakesLine = `<div style="font-size:11px;margin-top:4px">${placeStakesBadgeHTML(stakes)}</div>`;
   if ((a == null) !== (b == null)) {
     const winner = a ?? b;
     return `<div style="background:var(--ylw-bg);border:1px dashed var(--ylw);border-radius:10px;padding:10px 14px;margin-bottom:8px">
       <div style="font-size:11px;color:var(--muted)">${titlePrefix}${roundLabel} · Match ${idx + 1}</div>
       <div style="font-weight:700;margin-top:4px">🟡 ${tName(winner)} qualifié(e) directement (exempt)</div>
+      ${stakesLine}
     </div>`;
   }
   if (a == null && b == null) return '';
@@ -1050,11 +1109,6 @@ function nodeMatchCardHTML(bracket, node, path, round, idx) {
   const done = r.ga !== '' && r.gb !== '';
   const ecartOk = done && Math.abs(+r.ga - +r.gb) >= ST.cfg.ecart;
   const warn = done && !ecartOk ? `<span style="color:var(--ylw);font-size:11px"> ⚠ écart < ${ST.cfg.ecart} pts</span>` : '';
-  const willContinue = round < node.depth - 1;
-  const hint = isCons
-    ? (willContinue ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">➜ Gagnant et perdant continuent tous les deux en classement</div>`
-                     : `<div style="font-size:10px;color:var(--muted);margin-top:4px">🏅 Ce match attribue 2 places au classement final</div>`)
-    : (willContinue ? `<div style="font-size:10px;color:var(--muted);margin-top:4px">➜ Gagnant : tour suivant · Perdant : continue en classement</div>` : '');
   const setA = `setNodeResult('${bracket}','${pathStr}',${round},${idx},'ga',this.value)`;
   const setB = `setNodeResult('${bracket}','${pathStr}',${round},${idx},'gb',this.value)`;
   return `<div style="background:var(--s1);border:1px solid ${isCons ? 'var(--brand2)' : (done ? (ecartOk ? 'var(--grn)' : 'var(--ylw)') : 'var(--bdr)')};border-radius:10px;padding:10px 14px;margin-bottom:8px">
@@ -1064,7 +1118,7 @@ function nodeMatchCardHTML(bracket, node, path, round, idx) {
       ${scoreInputHTML(r.ga, r.gb, setA, setB, !isScorer())}
       <div style="flex:1;font-weight:600;text-align:right">${tName(b)}</div>
     </div>
-    ${hint}
+    ${stakesLine}
   </div>`;
 }
 function renderBracketRoundTabs(bracket) {
@@ -1096,7 +1150,9 @@ function renderBracketColumn(bracket, title) {
   } else {
     const g = Math.min(Math.max(0, ST.activeBracketRound[bracket] || 0), br.depth - 1);
     const rounds = collectGlobalRoundMatches(bracket);
-    const matches = (rounds[g] || []).slice().sort((m1, m2) => (m1.path.length - m2.path.length) || (m1.idx - m2.idx));
+    // Ordre d'affichage : des matchs de classement les moins prestigieux vers
+    // les plus prestigieux, pour finir par la finale (1ère - 2ème place).
+    const matches = (rounds[g] || []).slice().sort((m1, m2) => computeAbsolutePlaceOffset(bracket, m2.path) - computeAbsolutePlaceOffset(bracket, m1.path) || (m1.idx - m2.idx));
     if (!matches.length) body = '<div class="info info-b">Aucun match à ce tour pour le moment (en attente des résultats du tour précédent).</div>';
     else body = matches.map(m => nodeMatchCardHTML(bracket, m.node, m.path, m.round, m.idx)).join('');
   }
@@ -1170,7 +1226,8 @@ function renderRegisterPage() {
     <label>Joueur 1 *</label><input type="text" id="regP1" style="margin-bottom:10px" placeholder="Prénom Nom">
     <label>Joueur 2 *</label><input type="text" id="regP2" style="margin-bottom:10px" placeholder="Prénom Nom">
     <label>Club</label><input type="text" id="regClub" style="margin-bottom:10px" placeholder="Nom du club">
-    <label>Téléphone / email de contact</label><input type="text" id="regContact" style="margin-bottom:14px" placeholder="Pour vous recontacter si besoin">
+    <label>Téléphone</label><input type="tel" id="regTel" style="margin-bottom:10px" placeholder="06 12 34 56 78">
+    <label>Email</label><input type="email" id="regEmail" style="margin-bottom:14px" placeholder="email@exemple.com">
     <button class="btn btn-b" style="width:100%" onclick="submitRegistration()">Envoyer l'inscription</button>
     <div id="regMsg" style="margin-top:8px;font-size:13px"></div>
   </div>`;
@@ -1180,12 +1237,13 @@ window.submitRegistration = async function() {
   const p1 = document.getElementById('regP1').value.trim();
   const p2 = document.getElementById('regP2').value.trim();
   const club = document.getElementById('regClub').value.trim();
-  const contact = document.getElementById('regContact').value.trim();
+  const tel = document.getElementById('regTel').value.trim();
+  const email = document.getElementById('regEmail').value.trim();
   const msgEl = document.getElementById('regMsg');
   if (!p1 || !p2) { if (msgEl) { msgEl.textContent = 'Les deux noms de joueurs sont requis.'; msgEl.style.color = 'var(--red)'; } return; }
   try {
     const ref = doc(collection(db, 'petanque_registrations'));
-    await setDoc(ref, { p1, p2, club, contact, status: 'pending', createdAt: Date.now() });
+    await setDoc(ref, { p1, p2, club, tel, email, status: 'pending', createdAt: Date.now() });
     ST.regSubmitted = true;
     renderRegisterPage();
   } catch (e) {
@@ -1237,7 +1295,7 @@ function renderRegistrationsPanel() {
     <div style="display:flex;align-items:center;gap:10px;background:var(--s1);border:1px solid var(--bdr);border-radius:10px;padding:10px 14px;margin-bottom:6px;flex-wrap:wrap">
       <div style="flex:1;min-width:180px">
         <div style="font-weight:700">${r.p1} / ${r.p2}</div>
-        <div style="font-size:12px;color:var(--muted)">${r.club || 'Sans club'}${r.contact ? ' · ' + r.contact : ''}</div>
+        <div style="font-size:12px;color:var(--muted)">${r.club || 'Sans club'}${r.tel ? ' · 📞 ' + r.tel : ''}${r.email ? ' · ✉️ ' + r.email : ''}</div>
       </div>
       <button class="btn btn-b btn-xs" onclick="acceptRegistration('${r.id}')">✓ Valider</button>
       <button class="btn btn-ghost btn-xs" onclick="rejectRegistration('${r.id}')" style="color:var(--red)">✕ Refuser</button>
@@ -1467,14 +1525,16 @@ function getTVScreens() {
     }
     const roundsToShow = firstUnfinished === -1 ? [br.depth - 1] : [firstUnfinished];
     roundsToShow.forEach(g => {
-      const ms = rounds[g] || [];
+      const ms = (rounds[g] || []).slice().sort((m1, m2) => computeAbsolutePlaceOffset(bk, m2.path) - computeAbsolutePlaceOffset(bk, m1.path) || (m1.idx - m2.idx));
       const flat = [];
       ms.forEach(m => {
         const { a, b } = nodeMatchTeams(bk, m.node, m.path, m.round, m.idx);
         if (a == null && b == null) return;
         const r = nodeResultOf(bk, m.path, m.round, m.idx);
         const tag = m.path.length > 0 ? '🥈 Classement · ' : '';
-        flat.push({ label: label + ' · ' + tag + bracketRoundName(m.node.depth, m.round) + ' · M' + (m.idx + 1), time: '', aId: a, bId: b, r, done: (r.ga !== '' && r.gb !== '') || r.bye, isLive: g === ST.activeBracketRound[bk] });
+        const st = nodePlaceStakes(bk, m.node, m.path, m.round);
+        const placeTxt = st.isFinal ? (st.lo === st.hi ? `Place ${st.lo}` : `Places ${st.lo}-${st.hi}`) : `Perdant → ${st.loserLo}-${st.loserHi}`;
+        flat.push({ label: label + ' · ' + tag + bracketRoundName(m.node.depth, m.round) + ' · M' + (m.idx + 1) + ' · ' + placeTxt, time: '', aId: a, bId: b, r, done: (r.ga !== '' && r.gb !== '') || r.bye, isLive: g === ST.activeBracketRound[bk] });
       });
       const pageCount = Math.max(1, Math.ceil(flat.length / TV_PAGE_SIZE));
       for (let i = 0; i < pageCount; i++) {
