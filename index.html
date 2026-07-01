@@ -21,7 +21,7 @@ import { initializeApp } from "firebase/app";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged,
          createUserWithEmailAndPassword, GoogleAuthProvider, signInWithPopup } from "firebase/auth";
 import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot,
-         collection, getDocs, deleteDoc } from "firebase/firestore";
+         collection, getDocs, deleteDoc, increment } from "firebase/firestore";
 
 // ═══════════════════════════════════════════════════════════
 // FIREBASE — Projet tournoi-petanque-rsth
@@ -74,6 +74,7 @@ const ST = {
   registrations: [],
   regSubmitted: false,
   registrationMax: null,
+  registrationCount: 0,
   cfg: {
     name: 'Trophée Pétanque Doublette — RSTH',
     club: 'RSTH',
@@ -85,10 +86,7 @@ const ST = {
     scoreMax: 13,
     ecart: 2,          // 2 points d'écart obligatoires
     balance: 'level',
-    pauseEnabled: false, // prévoir une pause déjeuner
-    pauseMode: 'afterRound', // 'afterRound' (après un tour de poules) | 'betweenPhases' (entre phase 1 et phase 2)
-    pauseAfter: 0,     // pause déjeuner après le tour n° (mode 'afterRound')
-    pauseMin: 60        // durée de la pause en minutes
+    pauses: [], // [{id,label,mode:'afterRound'|'betweenPhases',afterRound,min}] — pauses programmées (déjeuner, café...)
   }
 };
 
@@ -156,6 +154,31 @@ function unsubAll() {
   if (unsubLiveWatch)  { unsubLiveWatch();  unsubLiveWatch = null; }
   if (liveWatchIv)     { clearInterval(liveWatchIv); liveWatchIv = null; }
 }
+// ─── Fermeture automatique après inactivité ────────────────
+// Évite qu'un accès (admin, scoreur ou public) reste ouvert indéfiniment
+// si on oublie de se déconnecter / fermer la page. Le mode Écran (TV),
+// destiné à rester affiché en continu, n'est jamais concerné.
+let inactivityTimer = null;
+const INACTIVITY_MS_STAFF  = 90 * 60 * 1000;  // 90 min pour admin / scoreur
+const INACTIVITY_MS_PUBLIC = 30 * 60 * 1000;  // 30 min pour public / spectateur / inscription
+function resetInactivityTimer() {
+  if (inactivityTimer) { clearTimeout(inactivityTimer); inactivityTimer = null; }
+  if (ST.page === 'TV') return; // le mode Écran reste affiché en continu, jamais de fermeture auto
+  if (!USER_ROLE) return;
+  const limit = (USER_ROLE === 'admin' || USER_ROLE === 'scorer') ? INACTIVITY_MS_STAFF : INACTIVITY_MS_PUBLIC;
+  inactivityTimer = setTimeout(handleInactivityTimeout, limit);
+}
+async function handleInactivityTimeout() {
+  if (ST.page === 'TV') return;
+  if (USER_ROLE === 'admin' || USER_ROLE === 'scorer') {
+    await window.logout();
+  } else if (USER_ROLE === 'spectator') {
+    unsubAll();
+    USER_ROLE = null; CURRENT_USER = null; ST.page = 1; ST.regSubmitted = false;
+    showLogin();
+  }
+}
+['click', 'keydown', 'mousemove', 'touchstart', 'scroll'].forEach(evt => document.addEventListener(evt, resetInactivityTimer, { passive: true }));
 function authErrMsg(code) {
   const map = {
     'auth/invalid-email': 'Adresse email invalide.',
@@ -193,6 +216,7 @@ function applyRoleUI() {
   const stepNav = document.getElementById('stepNav');
   if (stepNav) stepNav.style.display = isAdmin() ? '' : 'none';
   if (USER_ROLE === 'spectator') goTo(ST.teams.length > 0 && ST.phase !== 'config' ? 4 : 'T');
+  else if (USER_ROLE === 'scorer') goTo(4);
   else goTo(ST.phase === 'config' && ST.teams.length === 0 ? 1 : (ST.page === 1 ? 4 : ST.page));
 }
 
@@ -249,7 +273,12 @@ function updateRegistrationUI() {
 // Surveillance publique très légère : permet d'afficher le bouton "Inscrire mon
 // équipe" sur l'écran de connexion, avant même qu'un rôle (spectateur/staff) soit choisi.
 onSnapshot(doc(db, 'petanque', 'status'), snap => {
-  if (snap.exists()) { ST.registrationOpen = snap.data().registrationOpen === true; updateRegistrationUI(); }
+  if (snap.exists()) {
+    const d = snap.data();
+    ST.registrationOpen = d.registrationOpen === true;
+    ST.registrationCount = d.registrationCount || 0;
+    updateRegistrationUI();
+  }
 }, () => {});
 
 // ─── Firestore — abonnements ──────────────────────────────
@@ -290,6 +319,10 @@ function subscribeToResults() {
 }
 function applyTournamentData(data) {
   Object.assign(ST.cfg, data.cfg || {});
+  if (!Array.isArray(ST.cfg.pauses)) ST.cfg.pauses = [];
+  if (!ST.cfg.pauses.length && data.cfg && data.cfg.pauseEnabled) {
+    ST.cfg.pauses = [{ id: 'pz-migre', label: 'Pause déjeuner', mode: data.cfg.pauseMode || 'afterRound', afterRound: data.cfg.pauseAfter || 1, min: data.cfg.pauseMin || 60 }];
+  }
   ST.teams = data.teams || [];
   ST.groups = data.groups || [];
   ST.poolSchedule = data.poolSchedule || [];
@@ -327,6 +360,7 @@ function refreshCurrentPage() {
   updateRegistrationToggleBtn();
 }
 window.goTo = function(n) {
+  if (USER_ROLE === 'scorer' && n !== 4) n = 4; // le rôle scoreur n'a accès qu'à la saisie des scores en direct
   if (!LIVE_FREE_PAGES.includes(n) && isLiveBlocked()) {
     pendingSpecTarget = n;
     const overlay = document.getElementById('liveClosedOverlay');
@@ -337,6 +371,8 @@ window.goTo = function(n) {
   stopTVCycle();
   document.body.classList.toggle('tv-mode', n === 'TV');
   document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  updateSpecNavForPage(n);
+  resetInactivityTimer();
   if (n === 'T') {
     document.getElementById('pageT').classList.add('active');
     renderTeamsSpecPage();
@@ -368,6 +404,15 @@ window.goTo = function(n) {
   if (n === 4) renderTournamentPage();
   if (n === 5) renderFinalPage();
 };
+// Depuis la page d'inscription publique, on ne doit pouvoir consulter que le
+// Règlement — pas le Live, le Classement, les Équipes ni l'Écran.
+function updateSpecNavForPage(n) {
+  const restricted = n === 'REG';
+  ['4', '5', 'T', 'TV'].forEach(t => {
+    const btn = document.querySelector(`.spec-nav-btn[data-target="${t}"]`);
+    if (btn) btn.style.display = restricted ? 'none' : '';
+  });
+}
 window.goBack = function() { if (ST.page > 1 && typeof ST.page === 'number') goTo(ST.page - 1); };
 function canGoFwd() {
   if (ST.page === 1) return true;
@@ -414,25 +459,22 @@ function syncCfgForm() {
   set('cfgN', c.n); set('cfgCourts', c.courts);
   set('cfgMt', c.mt); set('cfgTt', c.tt); set('cfgStart', c.start);
   set('cfgScoreMax', c.scoreMax); set('cfgEcart', c.ecart);
-  set('cfgPauseAfter', c.pauseAfter || 1); set('cfgPauseMin', c.pauseMin);
   const bal = document.getElementById('cfgBalance'); if (bal) bal.value = c.balance;
-  const pauseChk = document.getElementById('cfgPauseEnabled'); if (pauseChk) pauseChk.checked = !!c.pauseEnabled;
-  const pauseModeEl = document.getElementById('cfgPauseMode'); if (pauseModeEl) pauseModeEl.value = c.pauseMode || 'afterRound';
-  const pauseFields = document.getElementById('cfgPauseFields'); if (pauseFields) pauseFields.style.display = c.pauseEnabled ? 'grid' : 'none';
-  const pauseAfterWrap = document.getElementById('cfgPauseAfterWrap'); if (pauseAfterWrap) pauseAfterWrap.style.display = (c.pauseEnabled && (c.pauseMode || 'afterRound') === 'afterRound') ? '' : 'none';
+  renderPausesEditor();
   renderCfgSummary();
+}
+function pauseSummaryText(p) {
+  return p.mode === 'betweenPhases'
+    ? `${p.label || 'Pause'} de <strong>${p.min} min</strong> entre la Phase 1 et la Phase 2`
+    : `${p.label || 'Pause'} de <strong>${p.min} min</strong> après le tour <strong>${p.afterRound}</strong>`;
 }
 function renderCfgSummary() {
   const el = document.getElementById('cfgSummary'); if (!el) return;
   const c = ST.cfg;
   const numGroups = computeGroupSizes(c.n).length;
   const nPrincipale = numGroups * 2, nConsolante = c.n - nPrincipale;
-  let pauseTxt = '';
-  if (c.pauseEnabled) {
-    pauseTxt = c.pauseMode === 'betweenPhases'
-      ? ` · 🍽️ Pause déjeuner de <strong>${c.pauseMin} min</strong> entre la Phase 1 et la Phase 2`
-      : ` · 🍽️ Pause déjeuner de <strong>${c.pauseMin} min</strong> après le tour <strong>${c.pauseAfter}</strong>`;
-  }
+  const pauses = Array.isArray(c.pauses) ? c.pauses : [];
+  const pauseTxt = pauses.length ? ' · 🍽️ ' + pauses.map(pauseSummaryText).join(' · ') : '';
   el.innerHTML = `<div class="info info-b">
     🎯 <strong>${c.n}</strong> équipes (${c.n * 2} joueurs) · <strong>${numGroups}</strong> groupes de 4 en Phase 1 ·
     <strong>${c.courts}</strong> terrains · partie ≈ <strong>${c.mt} min</strong> (+${c.tt} min battement) ·
@@ -440,6 +482,41 @@ function renderCfgSummary() {
     📊 Phase 2 : <strong>${nPrincipale}</strong> équipes en Principale · <strong>${nConsolante}</strong> en Consolante
   </div>`;
 }
+function renderPausesEditor() {
+  const el = document.getElementById('pausesEditorEl'); if (!el) return;
+  const pauses = Array.isArray(ST.cfg.pauses) ? ST.cfg.pauses : [];
+  if (!pauses.length) { el.innerHTML = '<div class="info info-b">Aucune pause programmée.</div>'; return; }
+  el.innerHTML = pauses.map(p => `
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:var(--s1);border:1px solid var(--bdr);border-radius:10px;padding:8px 10px;margin-bottom:6px">
+      <input type="text" value="${p.label || ''}" style="width:140px" placeholder="Nom (ex: Pause déjeuner)" onchange="onPauseFieldChange('${p.id}','label',this.value)">
+      <select onchange="onPauseFieldChange('${p.id}','mode',this.value)">
+        <option value="afterRound" ${p.mode === 'afterRound' ? 'selected' : ''}>Après le tour de poules n°</option>
+        <option value="betweenPhases" ${p.mode === 'betweenPhases' ? 'selected' : ''}>Entre Phase 1 et Phase 2</option>
+      </select>
+      ${p.mode === 'afterRound' ? `<input type="number" min="1" max="20" value="${p.afterRound || 1}" style="width:60px" onchange="onPauseFieldChange('${p.id}','afterRound',this.value)">` : ''}
+      <span style="display:flex;align-items:center;gap:4px"><input type="number" min="0" max="240" value="${p.min || 0}" style="width:70px" onchange="onPauseFieldChange('${p.id}','min',this.value)"> min</span>
+      <button class="btn btn-ghost btn-xs" onclick="removePauseRow('${p.id}')" style="color:var(--red)">✕ Retirer</button>
+    </div>`).join('');
+}
+window.addPauseRow = function() {
+  if (!Array.isArray(ST.cfg.pauses)) ST.cfg.pauses = [];
+  ST.cfg.pauses.push({ id: 'pz' + Date.now() + Math.floor(Math.random() * 1000), label: ST.cfg.pauses.length ? 'Pause' : 'Pause déjeuner', mode: 'afterRound', afterRound: 1, min: 20 });
+  renderPausesEditor(); renderCfgSummary();
+  if (isAdmin()) saveTournament({ cfg: ST.cfg });
+};
+window.removePauseRow = function(id) {
+  ST.cfg.pauses = (ST.cfg.pauses || []).filter(p => p.id !== id);
+  renderPausesEditor(); renderCfgSummary();
+  if (isAdmin()) saveTournament({ cfg: ST.cfg });
+};
+window.onPauseFieldChange = function(id, field, value) {
+  const p = (ST.cfg.pauses || []).find(x => x.id === id); if (!p) return;
+  if (field === 'min' || field === 'afterRound') value = Math.max(field === 'afterRound' ? 1 : 0, +value || 0);
+  p[field] = value;
+  if (field === 'mode') renderPausesEditor();
+  renderCfgSummary();
+  if (isAdmin()) saveTournament({ cfg: ST.cfg });
+};
 window.onCfgChange = function() {
   ST.cfg.name   = document.getElementById('cfgName').value.trim() || 'Trophée Pétanque Doublette';
   ST.cfg.club   = document.getElementById('cfgClub').value.trim();
@@ -451,12 +528,6 @@ window.onCfgChange = function() {
   ST.cfg.scoreMax = Math.max(11, Math.min(25, +document.getElementById('cfgScoreMax').value || 13));
   ST.cfg.ecart  = Math.max(1,  Math.min(3, +document.getElementById('cfgEcart').value || 2));
   ST.cfg.balance = document.getElementById('cfgBalance').value || 'level';
-  ST.cfg.pauseEnabled = !!document.getElementById('cfgPauseEnabled').checked;
-  ST.cfg.pauseMode = document.getElementById('cfgPauseMode').value || 'afterRound';
-  ST.cfg.pauseAfter = Math.max(1, Math.min(20, +document.getElementById('cfgPauseAfter').value || 1));
-  ST.cfg.pauseMin   = Math.max(0, Math.min(180, +document.getElementById('cfgPauseMin').value || 0));
-  const pauseFields = document.getElementById('cfgPauseFields'); if (pauseFields) pauseFields.style.display = ST.cfg.pauseEnabled ? 'grid' : 'none';
-  const pauseAfterWrap = document.getElementById('cfgPauseAfterWrap'); if (pauseAfterWrap) pauseAfterWrap.style.display = (ST.cfg.pauseEnabled && ST.cfg.pauseMode === 'afterRound') ? '' : 'none';
   renderCfgSummary();
   document.title = '🎯 ' + ST.cfg.name;
   const brandEl = document.getElementById('hdrBrandText'); if (brandEl) brandEl.textContent = '🎯 ' + ST.cfg.name;
@@ -581,8 +652,8 @@ function roundRobinPairs(teamIds) {
 }
 function buildPoolSchedule() {
   const courts = ST.cfg.courts, mt = ST.cfg.mt, tt = ST.cfg.tt || 10, start = ST.cfg.start || '09:00';
-  const pauseActive = !!ST.cfg.pauseEnabled && (ST.cfg.pauseMode || 'afterRound') === 'afterRound';
-  const pauseAfter = pauseActive ? (ST.cfg.pauseAfter || 0) : 0, pauseMin = ST.cfg.pauseMin || 0;
+  const pauses = Array.isArray(ST.cfg.pauses) ? ST.cfg.pauses : [];
+  const afterRoundPauses = pauses.filter(p => p.mode === 'afterRound' && (+p.afterRound || 0) > 0 && (+p.min || 0) > 0);
   const groupRounds = ST.groups.map(g => roundRobinPairs(g.teamIds));
   const maxRounds = Math.max(0, ...groupRounds.map(r => r.length));
   const schedule = []; let counter = 0, elapsed = 0;
@@ -597,7 +668,7 @@ function buildPoolSchedule() {
       });
       elapsed += mt + tt;
     }
-    if (pauseAfter > 0 && (r + 1) === pauseAfter && pauseMin > 0) elapsed += pauseMin;
+    afterRoundPauses.forEach(p => { if (+p.afterRound === (r + 1)) elapsed += +p.min; });
   }
   return schedule;
 }
@@ -657,12 +728,8 @@ function renderPlanningPreview() {
   if (!ST.poolSchedule.length) ST.poolSchedule = buildPoolSchedule();
   const numRounds = Math.max(0, ...ST.poolSchedule.map(m => m.round)) + 1;
   const endTime = ST.poolSchedule.length > 0 ? ST.poolSchedule[ST.poolSchedule.length - 1].time : '--:--';
-  let pauseTxt = '';
-  if (ST.cfg.pauseEnabled) {
-    pauseTxt = ST.cfg.pauseMode === 'betweenPhases'
-      ? ` · 🍽️ Pause déjeuner de <strong>${ST.cfg.pauseMin} min</strong> prévue entre la Phase 1 et la Phase 2`
-      : ` · 🍽️ Pause déjeuner de <strong>${ST.cfg.pauseMin} min</strong> prévue après le tour <strong>${ST.cfg.pauseAfter}</strong>`;
-  }
+  const pausesList = Array.isArray(ST.cfg.pauses) ? ST.cfg.pauses : [];
+  const pauseTxt = pausesList.length ? ' · 🍽️ ' + pausesList.map(p => 'prévue : ' + pauseSummaryText(p)).join(' · ') : '';
   el.innerHTML = `
     <div class="info info-b" style="margin-bottom:12px">📋 <strong>${ST.groups.length}</strong> groupes · <strong>${ST.poolSchedule.length}</strong> matchs de phase 1 répartis sur <strong>${numRounds}</strong> tour${numRounds>1?'s':''} · Dernier match prévu vers <strong>${endTime}</strong>${pauseTxt}</div>
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin:14px 0">
@@ -986,9 +1053,8 @@ function computeBracketRoundTimes() {
   const courts = ST.cfg.courts || 8, mt = ST.cfg.mt || 45, tt = ST.cfg.tt || 10;
   const lastPool = ST.poolSchedule.length ? ST.poolSchedule[ST.poolSchedule.length - 1].time : (ST.cfg.start || '09:00');
   let bracketStart = ST.poolSchedule.length ? addMinutes(lastPool, mt + tt) : (ST.cfg.start || '09:00');
-  if (ST.cfg.pauseEnabled && ST.cfg.pauseMode === 'betweenPhases' && ST.cfg.pauseMin > 0) {
-    bracketStart = addMinutes(bracketStart, ST.cfg.pauseMin);
-  }
+  const betweenPauses = (Array.isArray(ST.cfg.pauses) ? ST.cfg.pauses : []).filter(p => p.mode === 'betweenPhases' && (+p.min || 0) > 0);
+  betweenPauses.forEach(p => { bracketStart = addMinutes(bracketStart, +p.min); });
   const times = []; let elapsed = 0;
   for (let g = 0; g < maxG; g++) {
     times.push(addMinutes(bracketStart, elapsed));
@@ -1228,7 +1294,8 @@ function renderBracketColumn(bracket, title) {
     // les plus prestigieux, pour finir par la finale (1ère - 2ème place).
     const matches = (rounds[g] || []).slice().sort((m1, m2) => computeAbsolutePlaceOffset(bracket, m2.path) - computeAbsolutePlaceOffset(bracket, m1.path) || (m1.idx - m2.idx));
     const times = computeBracketRoundTimes();
-    const lunchNote = (g === 0 && ST.cfg.pauseEnabled && ST.cfg.pauseMode === 'betweenPhases' && ST.cfg.pauseMin > 0) ? ` — pause déjeuner de ${ST.cfg.pauseMin} min incluse` : '';
+    const betweenPausesList = (Array.isArray(ST.cfg.pauses) ? ST.cfg.pauses : []).filter(p => p.mode === 'betweenPhases' && (+p.min || 0) > 0);
+    const lunchNote = (g === 0 && betweenPausesList.length) ? ` — ${betweenPausesList.map(p => `${p.label || 'pause'} de ${p.min} min`).join(', ')} incluse(s)` : '';
     const timeBanner = times[g] ? `<div class="info info-b" style="margin-bottom:8px">🕒 Ce tour est prévu vers <strong>${times[g]}</strong>${lunchNote} (horaire estimatif, selon l'avancement réel)</div>` : '';
     if (!matches.length) body = timeBanner + '<div class="info info-b">Aucun match à ce tour pour le moment (en attente des résultats du tour précédent).</div>';
     else body = timeBanner + matches.map(m => nodeMatchCardHTML(bracket, m.node, m.path, m.round, m.idx)).join('');
@@ -1296,9 +1363,10 @@ function renderRegisterPage() {
     return;
   }
   const cap = registrationCap();
-  const full = ST.teams.length >= cap;
+  const used = ST.registrationCount || 0;
+  const full = used >= cap;
   if (full && !ST.regSubmitted) {
-    el.innerHTML = `<div class="info info-b">🚫 Les inscriptions en ligne sont complètes (${ST.teams.length}/${cap} équipes). Contactez l'organisateur si vous souhaitez être ajouté(e) en liste d'attente.</div>`;
+    el.innerHTML = `<div class="info info-b">🚫 Les inscriptions en ligne sont complètes (${used}/${cap} équipes). Contactez l'organisateur si vous souhaitez être ajouté(e) en liste d'attente.</div>`;
     return;
   }
   if (ST.regSubmitted) {
@@ -1306,7 +1374,7 @@ function renderRegisterPage() {
       <button class="btn btn-ghost btn-sm" style="margin-top:10px" onclick="resetRegistrationForm()">📝 Inscrire une autre équipe</button>`;
     return;
   }
-  el.innerHTML = `<div class="info info-b" style="margin-bottom:10px">${ST.teams.length}/${cap} équipes inscrites en ligne</div>
+  el.innerHTML = `<div class="info info-b" style="margin-bottom:10px">${used}/${cap} équipes inscrites en ligne</div>
   <div class="card">
     <label>Joueur 1 *</label><input type="text" id="regP1" style="margin-bottom:10px" placeholder="Prénom Nom">
     <label>Joueur 2 *</label><input type="text" id="regP2" style="margin-bottom:10px" placeholder="Prénom Nom">
@@ -1319,7 +1387,7 @@ function renderRegisterPage() {
 }
 window.resetRegistrationForm = function() { ST.regSubmitted = false; renderRegisterPage(); };
 window.submitRegistration = async function() {
-  if (ST.teams.length >= registrationCap()) { renderRegisterPage(); return; }
+  if ((ST.registrationCount || 0) >= registrationCap()) { renderRegisterPage(); return; }
   const p1 = document.getElementById('regP1').value.trim();
   const p2 = document.getElementById('regP2').value.trim();
   const club = document.getElementById('regClub').value.trim();
@@ -1330,6 +1398,8 @@ window.submitRegistration = async function() {
   try {
     const ref = doc(collection(db, 'petanque_registrations'));
     await setDoc(ref, { p1, p2, club, tel, email, status: 'pending', createdAt: Date.now() });
+    // Compteur public "places en ligne utilisées" — décrémenté si l'admin refuse (voir rejectRegistration).
+    await setDoc(doc(db, 'petanque', 'status'), { registrationCount: increment(1) }, { merge: true });
     ST.regSubmitted = true;
     renderRegisterPage();
   } catch (e) {
@@ -1413,6 +1483,8 @@ window.rejectRegistration = async function(id) {
   const warn = contact ? `\n\nPensez à prévenir l'équipe (${contact}) puisqu'elle a été informée qu'elle serait avisée rapidement en cas de refus.` : '';
   if (!confirm('Refuser cette inscription ?' + warn)) return;
   await setDoc(doc(db, 'petanque_registrations', id), { status: 'rejected' }, { merge: true });
+  // Le refus libère la place en ligne comptabilisée pour le plafond public.
+  await setDoc(doc(db, 'petanque', 'status'), { registrationCount: increment(-1) }, { merge: true });
 };
 window.toggleAdminPanel = function() {
   const el = document.getElementById('adminPanel');
@@ -1470,8 +1542,10 @@ window.newTournament = async function() {
   if (!confirm('⚠️ Repartir de zéro ? Tout sera effacé.')) return;
   ST.teams = []; ST.groups = []; ST.poolSchedule = []; ST.brackets = { P: null, C: null }; ST.results = {};
   ST.phase = 'config'; ST.activePoolRound = 0; ST.activeBracketRound = { P: 0, C: 0 };
-  await saveTournament({ teams: [], groups: [], poolSchedule: [], brackets: { P: null, C: null }, phase: 'config', activePoolRound: 0, activeBracketRound: { P: 0, C: 0 }, liveOpen: false });
+  await saveTournament({ teams: [], groups: [], poolSchedule: [], brackets: { P: null, C: null }, phase: 'config', activePoolRound: 0, activeBracketRound: { P: 0, C: 0 }, liveOpen: false, registrationOpen: false, registrationMax: null });
+  await setDoc(doc(db, 'petanque', 'status'), { liveOpen: false, registrationOpen: false, registrationCount: 0 }, { merge: true });
   try { const snap = await getDocs(collection(db, 'petanque_results')); await Promise.all(snap.docs.map(d => deleteDoc(doc(db, 'petanque_results', d.id)))); } catch (e) {}
+  try { const snap = await getDocs(collection(db, 'petanque_registrations')); await Promise.all(snap.docs.map(d => deleteDoc(doc(db, 'petanque_registrations', d.id)))); } catch (e) {}
   goTo(1);
 };
 window.resetAllScores = async function() {
@@ -1711,14 +1785,18 @@ input[type=text],input[type=number],input[type=time],input[type=email],input[typ
 
 /* ── Login ── */
 #loginScreen { min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px; background:linear-gradient(160deg,#f3e4d0 0%,#f8efe2 55%,#ecd9bc 100%); }
-.login-box { background:#241a10; border-radius:18px; padding:30px 26px; max-width:420px; width:100%; box-shadow:0 18px 50px rgba(0,0,0,.3); }
+.login-box { background:#31281f; border-radius:18px; padding:30px 26px; max-width:420px; width:100%; box-shadow:0 18px 50px rgba(0,0,0,.3); }
 .login-brand { font-family:'Oswald',sans-serif; font-weight:700; font-size:24px; color:#ffd9b0; text-align:center; margin-bottom:4px; }
 .login-sub { text-align:center; color:rgba(255,255,255,.55); font-size:13px; margin-bottom:20px; }
+.login-org-ttl { text-align:center; font-family:'Oswald',sans-serif; font-weight:700; font-size:12px; letter-spacing:1px; text-transform:uppercase; color:rgba(255,217,176,.65); margin-bottom:12px; }
 .login-divider { display:flex; align-items:center; gap:10px; color:rgba(255,255,255,.35); font-size:11px; margin:16px 0; }
 .login-divider::before,.login-divider::after { content:''; flex:1; height:1px; background:rgba(255,255,255,.15); }
 #loginScreen input { background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.2); color:#fff; margin-bottom:10px; color-scheme:dark; }
 #loginScreen input::placeholder { color:rgba(255,255,255,.4); }
 #authMsg { font-size:12px; min-height:16px; margin-bottom:10px; text-align:center; }
+.login-public-section { margin-top:22px; padding:18px 16px 16px; background:#4a6741; border:1px solid rgba(255,255,255,.12); border-radius:14px; box-shadow:inset 0 1px 0 rgba(255,255,255,.06); }
+.login-public-ttl { text-align:center; font-family:'Oswald',sans-serif; font-weight:700; font-size:12px; letter-spacing:1px; text-transform:uppercase; color:#e9f5e4; margin-bottom:4px; }
+.login-public-sub { text-align:center; color:rgba(255,255,255,.6); font-size:12px; margin-bottom:14px; }
 .btn-google { display:flex; align-items:center; justify-content:center; gap:10px; width:100%; padding:12px 16px; background:#fff; border:none; border-radius:10px; font-family:'Oswald',sans-serif; font-size:15px; font-weight:600; color:#222; cursor:pointer; letter-spacing:.3px; margin-bottom:4px; transition:box-shadow .15s; }
 .btn-google:hover { box-shadow:0 2px 12px rgba(0,0,0,.25); }
 
@@ -1817,7 +1895,8 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
 <div id="loginScreen">
   <div class="login-box">
     <div class="login-brand">🎯 Trophée Pétanque Doublette</div>
-    <div class="login-sub">RSTH — Connexion organisateurs / scoreurs</div>
+    <div class="login-sub">RSTH</div>
+    <div class="login-org-ttl">🔑 Organisateurs / Scoreurs</div>
     <div id="authMsg"></div>
     <button class="btn-google" onclick="loginGoogle()">
       <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.33 2.56 13.22l7.98 6.19C12.43 13.08 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-3.59-13.46-8.91l-7.98 6.19C6.51 42.67 14.62 48 24 48z"/></svg>
@@ -1827,17 +1906,21 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
     <input type="email" id="loginEmailInput" placeholder="Email">
     <input type="password" id="loginPassInput" placeholder="Mot de passe" onkeydown="if(event.key==='Enter')loginEmail()">
     <button class="btn btn-b" style="width:100%" onclick="loginEmail()">Se connecter</button>
-    <div class="login-divider">ou accès public</div>
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
-      <button onclick="enterLiveModeAndGo(4)" style="padding:13px 6px;background:rgba(255,80,60,.12);border:1.5px solid rgba(255,120,90,.45);border-radius:10px;color:#ffb199;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:6px;grid-column:1 / -1"><span class="spec-nav-live-dot"></span> 🔴 Suivre le direct</button>
-    </div>
-    <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
-      <button onclick="enterLiveModeAndGo('T')"  style="padding:13px 6px;background:rgba(255,255,255,.08);border:1.5px solid rgba(255,200,150,.3);border-radius:10px;color:#ffdcb8;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:5px">👥 ÉQUIPES</button>
-      <button onclick="enterLiveModeAndGo('R')"  style="padding:13px 6px;background:rgba(255,255,255,.08);border:1.5px solid rgba(255,200,150,.3);border-radius:10px;color:#ffdcb8;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:5px">📋 RÈGLEMENT</button>
-      <button onclick="enterLiveModeAndGo('TV')" style="padding:13px 6px;background:rgba(255,255,255,.08);border:1.5px solid rgba(255,200,150,.3);border-radius:10px;color:#ffdcb8;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:5px">📺 ÉCRAN</button>
-    </div>
-    <div id="loginRegisterBox" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.15);text-align:center">
-      <button onclick="enterLiveModeAndGo('REG')" style="width:100%;padding:13px 6px;background:rgba(120,200,120,.12);border:1.5px solid rgba(140,220,140,.4);border-radius:10px;color:#bdf2bd;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase">📝 Inscrire mon équipe</button>
+
+    <div class="login-public-section">
+      <div class="login-public-ttl">👥 Espace public</div>
+      <div class="login-public-sub">Spectateurs — aucune connexion requise</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
+        <button onclick="enterLiveModeAndGo(4)" style="padding:13px 6px;background:rgba(255,80,60,.16);border:1.5px solid rgba(255,120,90,.5);border-radius:10px;color:#fff0ec;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:6px;grid-column:1 / -1"><span class="spec-nav-live-dot"></span> 🔴 Suivre le direct</button>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
+        <button onclick="enterLiveModeAndGo('T')"  style="padding:13px 6px;background:rgba(255,255,255,.12);border:1.5px solid rgba(255,255,255,.25);border-radius:10px;color:#fff;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:5px">👥 ÉQUIPES</button>
+        <button onclick="enterLiveModeAndGo('R')"  style="padding:13px 6px;background:rgba(255,255,255,.12);border:1.5px solid rgba(255,255,255,.25);border-radius:10px;color:#fff;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:5px">📋 RÈGLEMENT</button>
+        <button onclick="enterLiveModeAndGo('TV')" style="padding:13px 6px;background:rgba(255,255,255,.12);border:1.5px solid rgba(255,255,255,.25);border-radius:10px;color:#fff;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:5px">📺 ÉCRAN</button>
+      </div>
+      <div id="loginRegisterBox" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.2);text-align:center">
+        <button onclick="enterLiveModeAndGo('REG')" style="width:100%;padding:13px 6px;background:rgba(255,255,255,.9);border:1.5px solid #fff;border-radius:10px;color:#33352a;font-family:'Oswald',sans-serif;font-size:14px;font-weight:700;cursor:pointer;text-transform:uppercase">📝 Inscrire mon équipe</button>
+      </div>
     </div>
   </div>
 </div>
@@ -1965,23 +2048,9 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
     </div>
   </div>
   <div class="card">
-    <div class="card-ttl">🍽️ Pause déjeuner</div>
-    <div style="margin-bottom:10px">
-      <label style="display:flex;align-items:center;gap:8px;cursor:pointer">
-        <input type="checkbox" id="cfgPauseEnabled" onchange="onCfgChange()" style="width:16px;height:16px">
-        Prévoir une pause déjeuner
-      </label>
-    </div>
-    <div class="field-grid" id="cfgPauseFields" style="display:none">
-      <div><label>Quand ?</label>
-        <select id="cfgPauseMode" onchange="onCfgChange()">
-          <option value="afterRound">Après le tour de poules n°</option>
-          <option value="betweenPhases">Entre la Phase 1 et la Phase 2</option>
-        </select>
-      </div>
-      <div id="cfgPauseAfterWrap"><label>Numéro du tour</label><input type="number" id="cfgPauseAfter" min="1" max="20" onchange="onCfgChange()"></div>
-      <div><label>Durée de la pause (min)</label><input type="number" id="cfgPauseMin" min="0" max="180" onchange="onCfgChange()"></div>
-    </div>
+    <div class="card-ttl">🍽️ Pauses programmées (déjeuner, café…)</div>
+    <div id="pausesEditorEl" style="margin-bottom:10px"></div>
+    <button class="btn btn-ghost btn-sm" onclick="addPauseRow()">➕ Ajouter une pause</button>
   </div>
   <div class="card">
     <div class="card-ttl">🏅 Règles du score</div>
