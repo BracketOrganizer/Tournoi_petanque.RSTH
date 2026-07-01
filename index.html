@@ -73,6 +73,7 @@ const ST = {
   registrationOpen: false,
   registrations: [],
   regSubmitted: false,
+  registrationMax: null,
   cfg: {
     name: 'Trophée Pétanque Doublette — RSTH',
     club: 'RSTH',
@@ -296,6 +297,7 @@ function applyTournamentData(data) {
   ST.activeBracketRound = data.activeBracketRound || { P: 0, C: 0 };
   handleLiveOpenChange(data.liveOpen === true);
   ST.registrationOpen = data.registrationOpen === true;
+  ST.registrationMax = (data.registrationMax != null && data.registrationMax !== '') ? +data.registrationMax : null;
   updateRegistrationUI();
   refreshCurrentPage();
 }
@@ -926,6 +928,52 @@ function nodePlaceStakes(bracket, node, path, round) {
   const subSize = sizes[k] || 0;
   return { isFinal: false, winnerLo: offset + 1, winnerHi: offset + before, loserLo: offset + before + 1, loserHi: offset + before + subSize };
 }
+// ── Horaires estimés Phase 2 ──
+// Le nombre de matchs par tour global est structurellement déterminé (dépend
+// de la profondeur du tableau, pas des résultats) sauf pour la toute dernière
+// branche de classement, donc on peut estimer un horaire dès la composition
+// des tableaux, comme pour la Phase 1.
+function theoreticalGlobalRoundMatchCounts(bracket) {
+  const br = ST.brackets[bracket];
+  const counts = [];
+  if (!br || !br.teamCount || br.depth === 0) return counts;
+  for (let g = 0; g < br.depth; g++) counts.push(0);
+  (function walk(depth, teamCount, startGlobal) {
+    if (depth <= 0 || teamCount <= 0) return;
+    for (let j = 0; j < depth; j++) {
+      const g = startGlobal + j;
+      const slotsLen = Math.pow(2, depth);
+      const matchCount = slotsLen / Math.pow(2, j + 1);
+      if (g < counts.length) counts[g] += matchCount;
+      if (j < depth - 1) {
+        const sizes = idealGroupSizes(depth, teamCount);
+        const k = depth - 1 - j;
+        const subTeamCount = sizes[k] || 0;
+        if (subTeamCount > 0) {
+          const subDepth = subTeamCount <= 1 ? 0 : Math.ceil(Math.log2(subTeamCount));
+          walk(subDepth, subTeamCount, g + 1);
+        }
+      }
+    }
+  })(br.depth, br.teamCount, 0);
+  return counts;
+}
+function computeBracketRoundTimes() {
+  const countsP = theoreticalGlobalRoundMatchCounts('P');
+  const countsC = theoreticalGlobalRoundMatchCounts('C');
+  const maxG = Math.max(countsP.length, countsC.length);
+  const courts = ST.cfg.courts || 8, mt = ST.cfg.mt || 45, tt = ST.cfg.tt || 10;
+  const lastPool = ST.poolSchedule.length ? ST.poolSchedule[ST.poolSchedule.length - 1].time : (ST.cfg.start || '09:00');
+  const bracketStart = ST.poolSchedule.length ? addMinutes(lastPool, mt + tt) : (ST.cfg.start || '09:00');
+  const times = []; let elapsed = 0;
+  for (let g = 0; g < maxG; g++) {
+    times.push(addMinutes(bracketStart, elapsed));
+    const total = (countsP[g] || 0) + (countsC[g] || 0);
+    const waves = Math.max(1, Math.ceil(total / courts));
+    elapsed += waves * (mt + tt);
+  }
+  return times;
+}
 function bracketRoundName(depth, round) {
   const remaining = depth - round;
   const names = { 1: 'Finale', 2: 'Demi-finale', 3: 'Quart de finale', 4: '8e de finale', 5: '16e de finale', 6: '32e de finale' };
@@ -1126,11 +1174,13 @@ function renderBracketRoundTabs(bracket) {
   const br = ST.brackets[bracket]; if (!br) { el.innerHTML = ''; return; }
   if (br.depth === 0) { el.innerHTML = '<div class="info info-b">Une seule équipe dans ce tableau.</div>'; return; }
   const rounds = collectGlobalRoundMatches(bracket);
+  const times = computeBracketRoundTimes();
   let html = '';
   for (let g = 0; g < br.depth; g++) {
     const matches = rounds[g] || [];
     const done = matches.length > 0 && matches.every(m => isMatchDone(bracket, m.node, m.path, m.round, m.idx));
-    html += `<button class="rtab ${ST.activeBracketRound[bracket] === g ? 'rtab-active' : ''}" onclick="setBracketRound('${bracket}',${g})">Tour ${g + 1} ${done ? '✓' : ''}</button>`;
+    const t = times[g] ? ` · ${times[g]}` : '';
+    html += `<button class="rtab ${ST.activeBracketRound[bracket] === g ? 'rtab-active' : ''}" onclick="setBracketRound('${bracket}',${g})">Tour ${g + 1}${t} ${done ? '✓' : ''}</button>`;
   }
   el.innerHTML = html;
 }
@@ -1153,8 +1203,10 @@ function renderBracketColumn(bracket, title) {
     // Ordre d'affichage : des matchs de classement les moins prestigieux vers
     // les plus prestigieux, pour finir par la finale (1ère - 2ème place).
     const matches = (rounds[g] || []).slice().sort((m1, m2) => computeAbsolutePlaceOffset(bracket, m2.path) - computeAbsolutePlaceOffset(bracket, m1.path) || (m1.idx - m2.idx));
-    if (!matches.length) body = '<div class="info info-b">Aucun match à ce tour pour le moment (en attente des résultats du tour précédent).</div>';
-    else body = matches.map(m => nodeMatchCardHTML(bracket, m.node, m.path, m.round, m.idx)).join('');
+    const times = computeBracketRoundTimes();
+    const timeBanner = times[g] ? `<div class="info info-b" style="margin-bottom:8px">🕒 Ce tour est prévu vers <strong>${times[g]}</strong> (horaire estimatif, selon l'avancement réel)</div>` : '';
+    if (!matches.length) body = timeBanner + '<div class="info info-b">Aucun match à ce tour pour le moment (en attente des résultats du tour précédent).</div>';
+    else body = timeBanner + matches.map(m => nodeMatchCardHTML(bracket, m.node, m.path, m.round, m.idx)).join('');
   }
   const listEl = document.getElementById('bracketMatchList_' + bracket);
   if (listEl) listEl.innerHTML = body || '<div class="info info-b">Rien à afficher.</div>';
@@ -1210,6 +1262,7 @@ function renderTeamsSpecPage() {
 // avec la liste officielle des équipes ; l'admin valide ou refuse
 // chaque demande avant qu'elle ne rejoigne réellement le tournoi.
 // ═══════════════════════════════════════════════════════════
+function registrationCap() { return ST.registrationMax != null ? ST.registrationMax : ST.cfg.n; }
 function renderRegisterPage() {
   const el = document.getElementById('regPageBody'); if (!el) return;
   if (!ST.registrationOpen) {
@@ -1217,12 +1270,19 @@ function renderRegisterPage() {
     ST.regSubmitted = false;
     return;
   }
+  const cap = registrationCap();
+  const full = ST.teams.length >= cap;
+  if (full && !ST.regSubmitted) {
+    el.innerHTML = `<div class="info info-b">🚫 Les inscriptions en ligne sont complètes (${ST.teams.length}/${cap} équipes). Contactez l'organisateur si vous souhaitez être ajouté(e) en liste d'attente.</div>`;
+    return;
+  }
   if (ST.regSubmitted) {
-    el.innerHTML = `<div class="info info-g">✅ Inscription envoyée ! Elle sera validée par l'organisateur et apparaîtra ensuite dans la liste des équipes.</div>
+    el.innerHTML = `<div class="info info-g">✅ Votre inscription a bien été prise en compte !<br>Elle est en cours de validation par l'organisateur : si elle est acceptée, votre équipe apparaîtra dans la liste des équipes engagées. Si elle ne peut pas être acceptée (places complètes, doublon…), vous en serez avisé(e) très rapidement au numéro ou à l'email indiqué.</div>
       <button class="btn btn-ghost btn-sm" style="margin-top:10px" onclick="resetRegistrationForm()">📝 Inscrire une autre équipe</button>`;
     return;
   }
-  el.innerHTML = `<div class="card">
+  el.innerHTML = `<div class="info info-b" style="margin-bottom:10px">${ST.teams.length}/${cap} équipes inscrites en ligne</div>
+  <div class="card">
     <label>Joueur 1 *</label><input type="text" id="regP1" style="margin-bottom:10px" placeholder="Prénom Nom">
     <label>Joueur 2 *</label><input type="text" id="regP2" style="margin-bottom:10px" placeholder="Prénom Nom">
     <label>Club</label><input type="text" id="regClub" style="margin-bottom:10px" placeholder="Nom du club">
@@ -1234,6 +1294,7 @@ function renderRegisterPage() {
 }
 window.resetRegistrationForm = function() { ST.regSubmitted = false; renderRegisterPage(); };
 window.submitRegistration = async function() {
+  if (ST.teams.length >= registrationCap()) { renderRegisterPage(); return; }
   const p1 = document.getElementById('regP1').value.trim();
   const p2 = document.getElementById('regP2').value.trim();
   const club = document.getElementById('regClub').value.trim();
@@ -1275,10 +1336,19 @@ window.toggleRegistrationOpen = async function() {
   updateRegistrationToggleBtn();
   updateRegistrationUI();
 };
+window.saveRegistrationMax = async function() {
+  if (!isAdmin()) return;
+  const el = document.getElementById('registrationMaxInput'); if (!el) return;
+  const v = el.value.trim();
+  ST.registrationMax = v === '' ? null : Math.max(0, +v);
+  await saveTournament({ registrationMax: ST.registrationMax });
+};
 function updateRegistrationToggleBtn() {
   const btn = document.getElementById('registrationToggleBtn'); if (!btn) return;
   if (ST.registrationOpen) { btn.textContent = '🟢 Inscriptions ouvertes (public)'; btn.style.background = 'var(--grn)'; btn.style.borderColor = 'var(--grn)'; btn.style.color = '#fff'; }
   else                     { btn.textContent = '🔴 Inscriptions fermées (public)'; btn.style.background = 'var(--s1)'; btn.style.borderColor = 'var(--red)'; btn.style.color = 'var(--red)'; }
+  const maxEl = document.getElementById('registrationMaxInput');
+  if (maxEl && document.activeElement !== maxEl) maxEl.value = ST.registrationMax != null ? ST.registrationMax : '';
 }
 function subscribeToRegistrations() {
   onSnapshot(collection(db, 'petanque_registrations'), snap => {
@@ -1313,7 +1383,10 @@ window.acceptRegistration = async function(id) {
 };
 window.rejectRegistration = async function(id) {
   if (!isAdmin()) return;
-  if (!confirm('Refuser cette inscription ?')) return;
+  const r = ST.registrations.find(x => x.id === id);
+  const contact = r ? [r.tel, r.email].filter(Boolean).join(' / ') : '';
+  const warn = contact ? `\n\nPensez à prévenir l'équipe (${contact}) puisqu'elle a été informée qu'elle serait avisée rapidement en cas de refus.` : '';
+  if (!confirm('Refuser cette inscription ?' + warn)) return;
   await setDoc(doc(db, 'petanque_registrations', id), { status: 'rejected' }, { merge: true });
 };
 window.toggleAdminPanel = function() {
@@ -1789,6 +1862,9 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:12px 0 10px">
       <button id="liveToggleBtn" class="btn btn-sm" onclick="toggleLiveOpen()">🔴 Live fermé</button>
       <button id="registrationToggleBtn" class="btn btn-sm" onclick="toggleRegistrationOpen()">🔴 Inscriptions fermées (public)</button>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)">Max en ligne
+        <input type="number" id="registrationMaxInput" min="0" placeholder="= total" style="width:64px;padding:6px 8px" onchange="saveRegistrationMax()">
+      </label>
       <button class="btn btn-b btn-sm" onclick="toggleAdminPanel();goTo('TV')">📺 Mode Écran</button>
       <button class="btn btn-ghost btn-sm" onclick="printPlanning()">🖨 Planning</button>
       <button class="btn btn-ghost btn-sm" onclick="resetAllScores()" style="color:var(--red)">♻️ Réinitialiser scores</button>
