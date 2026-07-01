@@ -117,6 +117,7 @@ onAuthStateChanged(auth, async (user) => {
     applyRoleUI();
     subscribeToTournament();
     subscribeToResults();
+    if (isAdmin()) subscribeToRegistrations();
   } else if (USER_ROLE !== 'spectator') {
     CURRENT_USER = null; USER_ROLE = null;
     showLogin();
@@ -263,6 +264,7 @@ function subscribeToTournament() {
     if (!snap.exists()) return;
     applyTournamentData(snap.data());
     updateLiveToggleBtn();
+    updateRegistrationToggleBtn();
     if (isAdmin() && ST.page === 1) syncCfgForm();
     refreshCurrentPage();
   }, e => console.warn('subscribeToTournament', e));
@@ -311,6 +313,7 @@ function refreshCurrentPage() {
   if (ST.page === 'REG') renderRegisterPage();
   if (ST.page === 'TV') renderTVContent();
   updateLiveToggleBtn();
+  updateRegistrationToggleBtn();
 }
 window.goTo = function(n) {
   if (n !== 'R' && n !== 'T' && n !== 'REG' && isLiveBlocked()) {
@@ -1145,6 +1148,53 @@ function renderTeamsSpecPage() {
 }
 
 // ═══════════════════════════════════════════════════════════
+// INSCRIPTION PUBLIQUE (activée/désactivée par l'admin)
+// Les inscriptions publiques sont écrites dans une collection à
+// part ('petanque_registrations') pour ne jamais entrer en conflit
+// avec la liste officielle des équipes ; l'admin valide ou refuse
+// chaque demande avant qu'elle ne rejoigne réellement le tournoi.
+// ═══════════════════════════════════════════════════════════
+function renderRegisterPage() {
+  const el = document.getElementById('regPageBody'); if (!el) return;
+  if (!ST.registrationOpen) {
+    el.innerHTML = `<div class="info info-b">🔒 Les inscriptions ne sont pas ouvertes pour le moment. Revenez plus tard ou contactez l'organisateur.</div>`;
+    ST.regSubmitted = false;
+    return;
+  }
+  if (ST.regSubmitted) {
+    el.innerHTML = `<div class="info info-g">✅ Inscription envoyée ! Elle sera validée par l'organisateur et apparaîtra ensuite dans la liste des équipes.</div>
+      <button class="btn btn-ghost btn-sm" style="margin-top:10px" onclick="resetRegistrationForm()">📝 Inscrire une autre équipe</button>`;
+    return;
+  }
+  el.innerHTML = `<div class="card">
+    <label>Joueur 1 *</label><input type="text" id="regP1" style="margin-bottom:10px" placeholder="Prénom Nom">
+    <label>Joueur 2 *</label><input type="text" id="regP2" style="margin-bottom:10px" placeholder="Prénom Nom">
+    <label>Club</label><input type="text" id="regClub" style="margin-bottom:10px" placeholder="Nom du club">
+    <label>Téléphone / email de contact</label><input type="text" id="regContact" style="margin-bottom:14px" placeholder="Pour vous recontacter si besoin">
+    <button class="btn btn-b" style="width:100%" onclick="submitRegistration()">Envoyer l'inscription</button>
+    <div id="regMsg" style="margin-top:8px;font-size:13px"></div>
+  </div>`;
+}
+window.resetRegistrationForm = function() { ST.regSubmitted = false; renderRegisterPage(); };
+window.submitRegistration = async function() {
+  const p1 = document.getElementById('regP1').value.trim();
+  const p2 = document.getElementById('regP2').value.trim();
+  const club = document.getElementById('regClub').value.trim();
+  const contact = document.getElementById('regContact').value.trim();
+  const msgEl = document.getElementById('regMsg');
+  if (!p1 || !p2) { if (msgEl) { msgEl.textContent = 'Les deux noms de joueurs sont requis.'; msgEl.style.color = 'var(--red)'; } return; }
+  try {
+    const ref = doc(collection(db, 'petanque_registrations'));
+    await setDoc(ref, { p1, p2, club, contact, status: 'pending', createdAt: Date.now() });
+    ST.regSubmitted = true;
+    renderRegisterPage();
+  } catch (e) {
+    console.error('submitRegistration', e);
+    if (msgEl) { msgEl.textContent = "Erreur d'envoi : " + e.message; msgEl.style.color = 'var(--red)'; }
+  }
+};
+
+// ═══════════════════════════════════════════════════════════
 // ADMIN — Live / Comptes staff / Gestion rôles
 // ═══════════════════════════════════════════════════════════
 window.toggleLiveOpen = async function() {
@@ -1159,6 +1209,55 @@ function updateLiveToggleBtn() {
   if (ST.liveOpen) { btn.textContent = '🟢 Live ouvert (spectateurs)'; btn.style.background = 'var(--grn)'; btn.style.borderColor = 'var(--grn)'; btn.style.color = '#fff'; }
   else             { btn.textContent = '🔴 Live fermé (spectateurs)'; btn.style.background = 'var(--s1)'; btn.style.borderColor = 'var(--red)'; btn.style.color = 'var(--red)'; }
 }
+window.toggleRegistrationOpen = async function() {
+  if (!isAdmin()) return;
+  ST.registrationOpen = !ST.registrationOpen;
+  await saveTournament({ registrationOpen: ST.registrationOpen });
+  await setDoc(doc(db, 'petanque', 'status'), { registrationOpen: ST.registrationOpen }, { merge: true });
+  updateRegistrationToggleBtn();
+  updateRegistrationUI();
+};
+function updateRegistrationToggleBtn() {
+  const btn = document.getElementById('registrationToggleBtn'); if (!btn) return;
+  if (ST.registrationOpen) { btn.textContent = '🟢 Inscriptions ouvertes (public)'; btn.style.background = 'var(--grn)'; btn.style.borderColor = 'var(--grn)'; btn.style.color = '#fff'; }
+  else                     { btn.textContent = '🔴 Inscriptions fermées (public)'; btn.style.background = 'var(--s1)'; btn.style.borderColor = 'var(--red)'; btn.style.color = 'var(--red)'; }
+}
+function subscribeToRegistrations() {
+  onSnapshot(collection(db, 'petanque_registrations'), snap => {
+    ST.registrations = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => r.status !== 'accepted' && r.status !== 'rejected');
+    renderRegistrationsPanel();
+  }, e => console.warn('subscribeToRegistrations', e));
+}
+function renderRegistrationsPanel() {
+  const el = document.getElementById('registrationsListEl'); if (!el) return;
+  const badge = document.getElementById('registrationsCount');
+  if (badge) badge.textContent = ST.registrations.length ? String(ST.registrations.length) : '';
+  if (!ST.registrations.length) { el.innerHTML = '<div class="info info-b">Aucune inscription en attente.</div>'; return; }
+  el.innerHTML = ST.registrations.map(r => `
+    <div style="display:flex;align-items:center;gap:10px;background:var(--s1);border:1px solid var(--bdr);border-radius:10px;padding:10px 14px;margin-bottom:6px;flex-wrap:wrap">
+      <div style="flex:1;min-width:180px">
+        <div style="font-weight:700">${r.p1} / ${r.p2}</div>
+        <div style="font-size:12px;color:var(--muted)">${r.club || 'Sans club'}${r.contact ? ' · ' + r.contact : ''}</div>
+      </div>
+      <button class="btn btn-b btn-xs" onclick="acceptRegistration('${r.id}')">✓ Valider</button>
+      <button class="btn btn-ghost btn-xs" onclick="rejectRegistration('${r.id}')" style="color:var(--red)">✕ Refuser</button>
+    </div>`).join('');
+}
+window.acceptRegistration = async function(id) {
+  if (!isAdmin()) return;
+  const r = ST.registrations.find(x => x.id === id); if (!r) return;
+  if (ST.teams.length >= ST.cfg.n) { alert("Le nombre d'équipes maximum (" + ST.cfg.n + ") est déjà atteint. Augmentez-le en page Config ou refusez d'autres inscriptions avant de valider celle-ci."); return; }
+  const name = r.p1 + ' / ' + r.p2;
+  ST.teams.push({ id: 't' + Date.now() + Math.floor(Math.random() * 1000), p1: r.p1, p2: r.p2, club: r.club || '', lv: 3, name });
+  await saveTournament({ teams: ST.teams });
+  await setDoc(doc(db, 'petanque_registrations', id), { status: 'accepted' }, { merge: true });
+  renderTeamsPage();
+};
+window.rejectRegistration = async function(id) {
+  if (!isAdmin()) return;
+  if (!confirm('Refuser cette inscription ?')) return;
+  await setDoc(doc(db, 'petanque_registrations', id), { status: 'rejected' }, { merge: true });
+};
 window.toggleAdminPanel = function() {
   const el = document.getElementById('adminPanel');
   el.style.display = el.style.display === 'none' ? 'block' : 'none';
@@ -1629,10 +1728,16 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
     <!-- Ligne 1 : actions rapides -->
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:12px 0 10px">
       <button id="liveToggleBtn" class="btn btn-sm" onclick="toggleLiveOpen()">🔴 Live fermé</button>
+      <button id="registrationToggleBtn" class="btn btn-sm" onclick="toggleRegistrationOpen()">🔴 Inscriptions fermées (public)</button>
       <button class="btn btn-b btn-sm" onclick="toggleAdminPanel();goTo('TV')">📺 Mode Écran</button>
       <button class="btn btn-ghost btn-sm" onclick="printPlanning()">🖨 Planning</button>
       <button class="btn btn-ghost btn-sm" onclick="resetAllScores()" style="color:var(--red)">♻️ Réinitialiser scores</button>
       <button class="btn btn-ghost btn-sm" onclick="newTournament()" style="color:var(--red)">🆕 Nouveau tournoi</button>
+    </div>
+    <!-- Ligne 1bis : inscriptions publiques en attente -->
+    <div class="card" style="margin-bottom:10px">
+      <div class="card-ttl">📝 Inscriptions publiques en attente <span id="registrationsCount" style="color:var(--brand)"></span></div>
+      <div id="registrationsListEl"></div>
     </div>
     <!-- Ligne 2 : gestion staff -->
     <div class="card" style="margin-bottom:10px">
