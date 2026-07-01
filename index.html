@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
-<meta name="theme-color" content="#c1440e">
+<meta name="theme-color" content="#0a4a52">
 <title>🎯 Trophée Pétanque Doublette — RSTH</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&display=swap" rel="stylesheet">
@@ -20,7 +20,7 @@
 import { initializeApp } from "firebase/app";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged,
          createUserWithEmailAndPassword, GoogleAuthProvider, signInWithPopup,
-         setPersistence, browserSessionPersistence } from "firebase/auth";
+         setPersistence, inMemoryPersistence } from "firebase/auth";
 import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot,
          collection, getDocs, deleteDoc, increment } from "firebase/firestore";
 
@@ -38,9 +38,12 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-// Session uniquement : si l'admin/scoreur oublie de se déconnecter et ferme
-// l'onglet/le navigateur, la connexion ne survit pas — il faudra se reconnecter.
-setPersistence(auth, browserSessionPersistence).catch(() => {});
+// Aucune persistance de session : en cas de rechargement ou de réouverture de
+// l'appli (même si le navigateur garde techniquement l'onglet en mémoire), la
+// connexion admin/scoreur n'est jamais restaurée automatiquement — il faut se
+// reconnecter. Cela évite qu'un accès admin oublié ouvert ne réapparaisse plus
+// tard (par ex. si on rouvre l'appli en tant que spectateur ou scoreur).
+try { await setPersistence(auth, inMemoryPersistence); } catch (e) { console.warn('setPersistence', e); }
 // Instance secondaire : permet à l'admin de créer des comptes scorer sans se déconnecter
 const secondaryApp = initializeApp(firebaseConfig, 'secondary');
 const secondaryAuth = getAuth(secondaryApp);
@@ -117,12 +120,26 @@ onAuthStateChanged(auth, async (user) => {
       const snap = await getDoc(doc(db, 'users', user.uid));
       if (snap.exists()) role = snap.data().role || 'spectator';
     } catch (e) { console.warn('lecture rôle échouée', e); }
+    // Sécurité supplémentaire : si une session admin/scoreur est restée inactive
+    // trop longtemps (appli laissée ouverte en arrière-plan), on force la
+    // déconnexion au lieu de rouvrir l'accès automatiquement.
+    if (role === 'admin' || role === 'scorer') {
+      let last = 0;
+      try { last = parseInt(localStorage.getItem(LAST_ACTIVE_KEY) || '0', 10); } catch (e) {}
+      if (last && (Date.now() - last) > INACTIVITY_MS_STAFF) {
+        try { await signOut(auth); } catch (e) {}
+        CURRENT_USER = null; USER_ROLE = null;
+        showLogin();
+        return;
+      }
+    }
     USER_ROLE = role;
     showApp();
     applyRoleUI();
     subscribeToTournament();
     subscribeToResults();
     if (isAdmin()) subscribeToRegistrations();
+    resetInactivityTimer();
   } else if (USER_ROLE !== 'spectator') {
     CURRENT_USER = null; USER_ROLE = null;
     showLogin();
@@ -148,6 +165,7 @@ window.loginEmail = async function() {
 };
 window.logout = async function() {
   unsubAll();
+  clearStaffActive();
   await signOut(auth);
   USER_ROLE = 'spectator'; CURRENT_USER = null;
   showLogin();
@@ -165,10 +183,20 @@ function unsubAll() {
 let inactivityTimer = null;
 const INACTIVITY_MS_STAFF  = 90 * 60 * 1000;  // 90 min pour admin / scoreur
 const INACTIVITY_MS_PUBLIC = 30 * 60 * 1000;  // 30 min pour public / spectateur / inscription
+const LAST_ACTIVE_KEY = 'petanqueRSTH_lastActive'; // horodatage pour détecter une session admin/scoreur oubliée
+function markStaffActive() {
+  if (USER_ROLE === 'admin' || USER_ROLE === 'scorer') {
+    try { localStorage.setItem(LAST_ACTIVE_KEY, String(Date.now())); } catch (e) {}
+  }
+}
+function clearStaffActive() {
+  try { localStorage.removeItem(LAST_ACTIVE_KEY); } catch (e) {}
+}
 function resetInactivityTimer() {
   if (inactivityTimer) { clearTimeout(inactivityTimer); inactivityTimer = null; }
   if (ST.page === 'TV') return; // le mode Écran reste affiché en continu, jamais de fermeture auto
   if (!USER_ROLE) return;
+  markStaffActive();
   const limit = (USER_ROLE === 'admin' || USER_ROLE === 'scorer') ? INACTIVITY_MS_STAFF : INACTIVITY_MS_PUBLIC;
   inactivityTimer = setTimeout(handleInactivityTimeout, limit);
 }
@@ -183,6 +211,17 @@ async function handleInactivityTimeout() {
   }
 }
 ['click', 'keydown', 'mousemove', 'touchstart', 'scroll'].forEach(evt => document.addEventListener(evt, resetInactivityTimer, { passive: true }));
+// Si l'appli reste ouverte en arrière-plan (onglet minimisé, appli mobile en veille...),
+// le setTimeout ci-dessus peut ne pas s'exécuter fidèlement : on revérifie donc
+// l'ancienneté de la session dès que l'onglet redevient visible.
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState !== 'visible') return;
+  if (USER_ROLE !== 'admin' && USER_ROLE !== 'scorer') return;
+  let last = 0;
+  try { last = parseInt(localStorage.getItem(LAST_ACTIVE_KEY) || '0', 10); } catch (e) {}
+  if (last && (Date.now() - last) > INACTIVITY_MS_STAFF) handleInactivityTimeout();
+  else resetInactivityTimer();
+});
 function authErrMsg(code) {
   const map = {
     'auth/invalid-email': 'Adresse email invalide.',
@@ -227,33 +266,45 @@ function applyRoleUI() {
 // ─── Live spectateur ──────────────────────────────────────
 window.enterLiveModeAndGo = async function(target) {
   USER_ROLE = 'spectator'; CURRENT_USER = null;
+  // Vérification fraîche de l'état du Live AVANT toute navigation : évite que la
+  // page reste sur une valeur mémoire obsolète (encore "ouvert") le temps que les
+  // abonnements Firestore se mettent à jour, ce qui laissait passer la page bloquée
+  // un court instant avant que le message ne s'affiche par-dessus.
+  try {
+    const snap = await getDoc(doc(db, 'petanque', 'status'));
+    if (snap.exists()) ST.liveOpen = snap.data().liveOpen === true;
+  } catch (e) {}
   showApp(); applyRoleUI();
   subscribeToTournamentPublic();
   subscribeToResultsPublic();
   startLiveWatch();
-  // applyRoleUI() peut avoir tenté une navigation par défaut (bloquée si le live
-  // est fermé) et affiché l'overlay avant même qu'on sache où l'utilisateur veut
-  // vraiment aller : on nettoie ça avant la navigation explicite ci-dessous.
   pendingSpecTarget = null;
   const overlayEl = document.getElementById('liveClosedOverlay');
   if (overlayEl) overlayEl.style.display = 'none';
   if (target === 'TV') goTo('TV');
   else if (target === 'T') goTo('T');
   else if (target === 'REG') goTo('REG');
+  else if (target === 'R') { toggleRules(); } // le règlement reste consultable même si le Live est fermé
   else if (target === 4) goTo(4);
 };
-// Seuls le Règlement (indépendant du live) et l'Inscription (pilotée par son
-// propre interrupteur admin) restent accessibles quand le Live est fermé.
-// Live, Équipes, Classement et Écran sont alors tous bloqués.
-const LIVE_FREE_PAGES = ['R', 'REG'];
+const LIVE_FREE_PAGES = ['R', 'REG']; // si le Live est fermé, seuls le Règlement et l'inscription publique restent accessibles
 function handleLiveOpenChange(nowOpen) {
   ST.liveOpen = nowOpen;
   const overlay = document.getElementById('liveClosedOverlay');
   if (nowOpen) {
     if (overlay) overlay.style.display = 'none';
     if (pendingSpecTarget) { const t = pendingSpecTarget; pendingSpecTarget = null; goTo(t); }
-  } else if (USER_ROLE === 'spectator' && overlay && !LIVE_FREE_PAGES.includes(ST.page)) {
-    overlay.style.display = 'flex';
+  } else if (USER_ROLE === 'spectator' && !LIVE_FREE_PAGES.includes(ST.page)) {
+    // Le Live vient de se fermer pendant que le spectateur consultait une page
+    // désormais restreinte : on retire réellement cette page (pas seulement un
+    // message par-dessus), afin qu'elle ne puisse pas réapparaître en fermant
+    // le message. Si le Live rouvre, on le ramène automatiquement où il était.
+    pendingSpecTarget = ST.page;
+    ST.page = null;
+    stopTVCycle();
+    document.body.classList.remove('tv-mode');
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    if (overlay) overlay.style.display = 'flex';
   }
 }
 function startLiveWatch() {
@@ -453,6 +504,16 @@ window.toggleRules = function() {
   ST.rulesOpen = !ST.rulesOpen;
   const el = document.getElementById('rulesModal');
   if (el) el.style.display = ST.rulesOpen ? 'flex' : 'none';
+};
+window.closeLiveClosedOverlay = function() {
+  const overlay = document.getElementById('liveClosedOverlay');
+  if (overlay) overlay.style.display = 'none';
+  pendingSpecTarget = null;
+  if (USER_ROLE === 'spectator') {
+    unsubAll();
+    USER_ROLE = null; CURRENT_USER = null; ST.page = 1; ST.regSubmitted = false;
+    showLogin();
+  }
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -1790,19 +1851,20 @@ input[type=text],input[type=number],input[type=time],input[type=email],input[typ
 .rtab-active { background:var(--brand); color:#fff; border-color:var(--brand); }
 
 /* ── Login ── */
-#loginScreen { min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px; background:linear-gradient(160deg,#f3e4d0 0%,#f8efe2 55%,#ecd9bc 100%); }
-.login-box { background:#31281f; border-radius:18px; padding:30px 26px; max-width:420px; width:100%; box-shadow:0 18px 50px rgba(0,0,0,.3); }
-.login-brand { font-family:'Oswald',sans-serif; font-weight:700; font-size:24px; color:#ffd9b0; text-align:center; margin-bottom:4px; }
+#loginScreen { min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px; background:linear-gradient(160deg,#062a3d 0%,#0a4a52 45%,#0e6b52 100%); }
+.login-box { background:#0a1f2b; border-radius:18px; padding:30px 26px; max-width:420px; width:100%; box-shadow:0 18px 50px rgba(0,0,0,.35); }
+.login-brand { font-family:'Oswald',sans-serif; font-weight:700; font-size:24px; color:#8be8d8; text-align:center; margin-bottom:4px; }
 .login-sub { text-align:center; color:rgba(255,255,255,.55); font-size:13px; margin-bottom:20px; }
-.login-org-ttl { text-align:center; font-family:'Oswald',sans-serif; font-weight:700; font-size:12px; letter-spacing:1px; text-transform:uppercase; color:rgba(255,217,176,.65); margin-bottom:12px; }
-.login-divider { display:flex; align-items:center; gap:10px; color:rgba(255,255,255,.35); font-size:11px; margin:16px 0; }
-.login-divider::before,.login-divider::after { content:''; flex:1; height:1px; background:rgba(255,255,255,.15); }
-#loginScreen input { background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.2); color:#fff; margin-bottom:10px; color-scheme:dark; }
+.login-org-ttl { text-align:center; font-family:'Oswald',sans-serif; font-weight:700; font-size:12px; letter-spacing:1px; text-transform:uppercase; color:#cfe6ff; margin-bottom:12px; }
+.login-divider { display:flex; align-items:center; gap:10px; color:rgba(255,255,255,.4); font-size:11px; margin:16px 0; }
+.login-divider::before,.login-divider::after { content:''; flex:1; height:1px; background:rgba(255,255,255,.18); }
+#loginScreen input { background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.25); color:#fff; margin-bottom:10px; color-scheme:dark; }
 #loginScreen input::placeholder { color:rgba(255,255,255,.4); }
 #authMsg { font-size:12px; min-height:16px; margin-bottom:10px; text-align:center; }
-.login-public-section { margin-top:22px; padding:18px 16px 16px; background:#4a6741; border:1px solid rgba(255,255,255,.12); border-radius:14px; box-shadow:inset 0 1px 0 rgba(255,255,255,.06); }
-.login-public-ttl { text-align:center; font-family:'Oswald',sans-serif; font-weight:700; font-size:12px; letter-spacing:1px; text-transform:uppercase; color:#e9f5e4; margin-bottom:4px; }
-.login-public-sub { text-align:center; color:rgba(255,255,255,.6); font-size:12px; margin-bottom:14px; }
+.login-public-section { margin-bottom:22px; padding:18px 16px 16px; background:linear-gradient(135deg,#0f8a5f 0%,#0c6b6e 100%); border:1px solid rgba(255,255,255,.16); border-radius:14px; box-shadow:inset 0 1px 0 rgba(255,255,255,.08), 0 10px 26px rgba(10,80,60,.35); }
+.login-public-ttl { text-align:center; font-family:'Oswald',sans-serif; font-weight:700; font-size:12px; letter-spacing:1px; text-transform:uppercase; color:#eafff5; margin-bottom:4px; }
+.login-public-sub { text-align:center; color:rgba(255,255,255,.7); font-size:12px; margin-bottom:14px; }
+.login-org-section { padding:18px 16px 4px; background:linear-gradient(135deg,#12395e 0%,#1a4f7e 100%); border:1px solid rgba(255,255,255,.14); border-radius:14px; box-shadow:inset 0 1px 0 rgba(255,255,255,.06); }
 .btn-google { display:flex; align-items:center; justify-content:center; gap:10px; width:100%; padding:12px 16px; background:#fff; border:none; border-radius:10px; font-family:'Oswald',sans-serif; font-size:15px; font-weight:600; color:#222; cursor:pointer; letter-spacing:.3px; margin-bottom:4px; transition:box-shadow .15s; }
 .btn-google:hover { box-shadow:0 2px 12px rgba(0,0,0,.25); }
 
@@ -1903,33 +1965,34 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
     <div class="login-brand">🎯 Trophée Pétanque Doublette</div>
     <div class="login-sub">RSTH</div>
 
-    <div class="login-public-section" style="margin-top:0">
+    <div class="login-public-section">
       <div class="login-public-ttl">👥 Espace public</div>
       <div class="login-public-sub">Spectateurs — aucune connexion requise</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
-        <button onclick="enterLiveModeAndGo(4)" style="padding:13px 6px;background:rgba(255,80,60,.16);border:1.5px solid rgba(255,120,90,.5);border-radius:10px;color:#fff0ec;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:6px;grid-column:1 / -1"><span class="spec-nav-live-dot"></span> 🔴 Suivre le direct</button>
+        <button onclick="enterLiveModeAndGo(4)" style="padding:13px 6px;background:rgba(255,80,60,.18);border:1.5px solid rgba(255,120,90,.55);border-radius:10px;color:#fff0ec;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:6px;grid-column:1 / -1"><span class="spec-nav-live-dot"></span> 🔴 Suivre le direct</button>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
-        <button onclick="enterLiveModeAndGo('T')"  style="padding:13px 6px;background:rgba(255,255,255,.12);border:1.5px solid rgba(255,255,255,.25);border-radius:10px;color:#fff;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:5px">👥 ÉQUIPES</button>
-        <button onclick="toggleRules()"  style="padding:13px 6px;background:rgba(255,255,255,.12);border:1.5px solid rgba(255,255,255,.25);border-radius:10px;color:#fff;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:5px">📋 RÈGLEMENT</button>
-        <button onclick="enterLiveModeAndGo('TV')" style="padding:13px 6px;background:rgba(255,255,255,.12);border:1.5px solid rgba(255,255,255,.25);border-radius:10px;color:#fff;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:5px">📺 ÉCRAN</button>
+        <button onclick="enterLiveModeAndGo('T')"  style="padding:13px 6px;background:rgba(255,255,255,.14);border:1.5px solid rgba(255,255,255,.3);border-radius:10px;color:#fff;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:5px">👥 ÉQUIPES</button>
+        <button onclick="enterLiveModeAndGo('R')"  style="padding:13px 6px;background:rgba(255,255,255,.14);border:1.5px solid rgba(255,255,255,.3);border-radius:10px;color:#fff;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:5px">📋 RÈGLEMENT</button>
+        <button onclick="enterLiveModeAndGo('TV')" style="padding:13px 6px;background:rgba(255,255,255,.14);border:1.5px solid rgba(255,255,255,.3);border-radius:10px;color:#fff;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:5px">📺 ÉCRAN</button>
       </div>
-      <div id="loginRegisterBox" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.2);text-align:center">
-        <button onclick="enterLiveModeAndGo('REG')" style="width:100%;padding:13px 6px;background:rgba(255,255,255,.9);border:1.5px solid #fff;border-radius:10px;color:#33352a;font-family:'Oswald',sans-serif;font-size:14px;font-weight:700;cursor:pointer;text-transform:uppercase">📝 Inscrire mon équipe</button>
+      <div id="loginRegisterBox" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.25);text-align:center">
+        <button onclick="enterLiveModeAndGo('REG')" style="width:100%;padding:13px 6px;background:rgba(255,255,255,.95);border:1.5px solid #fff;border-radius:10px;color:#134a3d;font-family:'Oswald',sans-serif;font-size:14px;font-weight:700;cursor:pointer;text-transform:uppercase">📝 Inscrire mon équipe</button>
       </div>
     </div>
 
-    <div class="login-divider">ou accès organisateurs / scoreurs</div>
-    <div class="login-org-ttl">🔑 Organisateurs / Scoreurs</div>
-    <div id="authMsg"></div>
-    <button class="btn-google" onclick="loginGoogle()">
-      <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.33 2.56 13.22l7.98 6.19C12.43 13.08 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-3.59-13.46-8.91l-7.98 6.19C6.51 42.67 14.62 48 24 48z"/></svg>
-      Se connecter avec Google
-    </button>
-    <div class="login-divider">ou par email / mot de passe</div>
-    <input type="email" id="loginEmailInput" placeholder="Email">
-    <input type="password" id="loginPassInput" placeholder="Mot de passe" onkeydown="if(event.key==='Enter')loginEmail()">
-    <button class="btn btn-b" style="width:100%" onclick="loginEmail()">Se connecter</button>
+    <div class="login-org-section">
+      <div class="login-org-ttl">🔑 Organisateurs / Scoreurs</div>
+      <div id="authMsg"></div>
+      <button class="btn-google" onclick="loginGoogle()">
+        <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.33 2.56 13.22l7.98 6.19C12.43 13.08 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-3.59-13.46-8.91l-7.98 6.19C6.51 42.67 14.62 48 24 48z"/></svg>
+        Se connecter avec Google
+      </button>
+      <div class="login-divider">ou par email / mot de passe</div>
+      <input type="email" id="loginEmailInput" placeholder="Email">
+      <input type="password" id="loginPassInput" placeholder="Mot de passe" onkeydown="if(event.key==='Enter')loginEmail()">
+      <button class="btn btn-b" style="width:100%" onclick="loginEmail()">Se connecter</button>
+    </div>
   </div>
 </div>
 
@@ -1941,10 +2004,7 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
     <div style="font-size:40px;margin-bottom:10px">🔴</div>
     <div style="font-family:'Oswald',sans-serif;font-weight:700;margin-bottom:6px">Live actuellement fermé</div>
     <div style="font-size:13px;color:var(--muted);margin-bottom:14px">L'organisateur n'a pas encore ouvert l'accès en direct.</div>
-    <div style="display:flex;gap:8px;justify-content:center">
-      <button class="btn btn-ghost btn-sm" onclick="toggleRules()">📋 Règlement</button>
-      <button class="btn btn-ghost btn-sm" onclick="document.getElementById('liveClosedOverlay').style.display='none'">Fermer</button>
-    </div>
+    <button class="btn btn-ghost btn-sm" onclick="closeLiveClosedOverlay()">Fermer</button>
   </div>
 </div>
 
