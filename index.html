@@ -170,8 +170,18 @@ window.logout = async function() {
   USER_ROLE = 'spectator'; CURRENT_USER = null;
   showLogin();
 };
+window.exitLiveClosedToHome = function() {
+  pendingSpecTarget = null;
+  const overlay = document.getElementById('liveClosedOverlay');
+  if (overlay) overlay.style.display = 'none';
+  unsubAll();
+  USER_ROLE = null; CURRENT_USER = null; ST.page = 1; ST.regSubmitted = false;
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  const p1 = document.getElementById('page1');
+  if (p1) p1.classList.add('active');
+  showLogin();
+};
 function unsubAll() {
-  if (unsubTournament) { unsubTournament(); unsubTournament = null; }
   if (unsubResults)    { unsubResults();    unsubResults = null; }
   if (unsubLiveWatch)  { unsubLiveWatch();  unsubLiveWatch = null; }
   if (liveWatchIv)     { clearInterval(liveWatchIv); liveWatchIv = null; }
@@ -265,6 +275,30 @@ function applyRoleUI() {
 
 // ─── Live spectateur ──────────────────────────────────────
 window.enterLiveModeAndGo = async function(target) {
+  // Le règlement est une simple modale indépendante de l'appli : on peut
+  // l'afficher directement depuis l'écran d'accueil, sans jamais entrer en
+  // mode spectateur ni afficher le bandeau applicatif.
+  if (target === 'R') { toggleRules(); return; }
+
+  // Pour tout le reste, sauf l'inscription publique (toujours libre), on
+  // vérifie l'état réel du live AVANT d'entrer dans l'appli : si c'est fermé,
+  // on reste simplement sur l'écran d'accueil avec un message, plutôt que
+  // d'afficher le bandeau applicatif derrière l'overlay de blocage.
+  if (target !== 'REG') {
+    let liveIsOpen = false;
+    try {
+      const snap = await getDoc(doc(db, 'petanque', 'status'));
+      liveIsOpen = snap.exists() && snap.data().liveOpen === true;
+    } catch (e) {}
+    if (!liveIsOpen) {
+      const msgEl = document.getElementById('specPublicMsg');
+      if (msgEl) msgEl.textContent = "🔴 Live actuellement fermé — l'organisateur n'a pas encore ouvert l'accès en direct.";
+      return;
+    }
+  }
+  const msgEl0 = document.getElementById('specPublicMsg');
+  if (msgEl0) msgEl0.textContent = '';
+
   USER_ROLE = 'spectator'; CURRENT_USER = null;
   // Important : on force aussi la déconnexion de la vraie session Firebase Auth.
   // Sans ça, si l'utilisateur était (ou reste) connecté en admin/scorer, Firebase
@@ -286,7 +320,6 @@ window.enterLiveModeAndGo = async function(target) {
   if (target === 'TV') goTo('TV');
   else if (target === 'T') goTo('T');
   else if (target === 'REG') goTo('REG');
-  else if (target === 'R') { toggleRules(); } // le règlement reste consultable même si le Live est fermé
   else if (target === 4) goTo(4);
 };
 const LIVE_FREE_PAGES = ['R', 'REG']; // si le Live est fermé, seuls le Règlement et l'inscription publique restent accessibles
@@ -1961,6 +1994,7 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
     <div class="login-public-section">
       <div class="login-public-ttl">👥 Espace public</div>
       <div class="login-public-sub">Spectateurs — aucune connexion requise</div>
+      <div id="specPublicMsg" style="font-size:12px;min-height:16px;text-align:center;color:#ffd9a0;margin-bottom:6px"></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
         <button onclick="enterLiveModeAndGo(4)" style="padding:13px 6px;background:rgba(255,80,60,.18);border:1.5px solid rgba(255,120,90,.55);border-radius:10px;color:#fff0ec;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:6px;grid-column:1 / -1"><span class="spec-nav-live-dot"></span> 🔴 Suivre le direct</button>
       </div>
@@ -1997,7 +2031,7 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
     <div style="font-size:40px;margin-bottom:10px">🔴</div>
     <div style="font-family:'Oswald',sans-serif;font-weight:700;margin-bottom:6px">Live actuellement fermé</div>
     <div style="font-size:13px;color:var(--muted);margin-bottom:14px">L'organisateur n'a pas encore ouvert l'accès en direct.</div>
-    <button class="btn btn-ghost btn-sm" onclick="pendingSpecTarget=null;document.getElementById('liveClosedOverlay').style.display='none'">Fermer</button>
+    <button class="btn btn-ghost btn-sm" onclick="exitLiveClosedToHome()">Fermer</button>
   </div>
 </div>
 
