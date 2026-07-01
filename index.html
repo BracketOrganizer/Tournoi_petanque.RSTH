@@ -266,6 +266,13 @@ function applyRoleUI() {
 // ─── Live spectateur ──────────────────────────────────────
 window.enterLiveModeAndGo = async function(target) {
   USER_ROLE = 'spectator'; CURRENT_USER = null;
+  // Important : on force aussi la déconnexion de la vraie session Firebase Auth.
+  // Sans ça, si l'utilisateur était (ou reste) connecté en admin/scorer, Firebase
+  // peut réaffirmer cette session à tout moment (rafraîchissement de token,
+  // reconnexion réseau...) et onAuthStateChanged remettrait alors USER_ROLE sur
+  // 'admin'/'scorer' — un rôle jamais bloqué par le live fermé, ce qui ouvrait
+  // le live en douce derrière le dos du blocage spectateur.
+  if (auth.currentUser) { try { await signOut(auth); } catch (e) {} }
   showApp(); applyRoleUI();
   subscribeToTournamentPublic();
   subscribeToResultsPublic();
