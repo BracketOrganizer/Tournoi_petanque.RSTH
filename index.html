@@ -168,6 +168,7 @@ window.logout = async function() {
   clearStaffActive();
   await signOut(auth);
   USER_ROLE = 'spectator'; CURRENT_USER = null;
+  ST.liveOpen = false; // évite qu'un état "ouvert" périmé ne reste en mémoire pour la session suivante
   showLogin();
 };
 function unsubAll() {
@@ -206,7 +207,7 @@ async function handleInactivityTimeout() {
     await window.logout();
   } else if (USER_ROLE === 'spectator') {
     unsubAll();
-    USER_ROLE = null; CURRENT_USER = null; ST.page = 1; ST.regSubmitted = false;
+    USER_ROLE = null; CURRENT_USER = null; ST.page = 1; ST.regSubmitted = false; ST.liveOpen = false;
     showLogin();
   }
 }
@@ -266,6 +267,11 @@ function applyRoleUI() {
 // ─── Live spectateur ──────────────────────────────────────
 window.enterLiveModeAndGo = async function(target) {
   USER_ROLE = 'spectator'; CURRENT_USER = null;
+  // On présume le Live fermé tant qu'on n'a pas relu son état réel sur Firebase :
+  // ST.liveOpen peut contenir une valeur périmée (d'une session précédente encore
+  // en mémoire), ce qui permettait à tort d'accéder aux pages protégées avant que
+  // les écoutes temps réel ne se mettent à jour.
+  ST.liveOpen = false;
   showApp(); applyRoleUI();
   subscribeToTournamentPublic();
   subscribeToResultsPublic();
@@ -276,10 +282,16 @@ window.enterLiveModeAndGo = async function(target) {
   pendingSpecTarget = null;
   const overlayEl = document.getElementById('liveClosedOverlay');
   if (overlayEl) overlayEl.style.display = 'none';
+  if (target === 'R') { toggleRules(); return; } // le règlement reste consultable même si le Live est fermé
+  // Pour toute autre destination, on relit l'état réel et à jour du Live avant de
+  // naviguer, au lieu de se fier à une valeur en mémoire potentiellement obsolète.
+  try {
+    const snap = await getDoc(doc(db, 'petanque', 'status'));
+    ST.liveOpen = snap.exists() && snap.data().liveOpen === true;
+  } catch (e) { ST.liveOpen = false; }
   if (target === 'TV') goTo('TV');
   else if (target === 'T') goTo('T');
   else if (target === 'REG') goTo('REG');
-  else if (target === 'R') { toggleRules(); } // le règlement reste consultable même si le Live est fermé
   else if (target === 4) goTo(4);
 };
 const LIVE_FREE_PAGES = ['R', 'REG']; // si le Live est fermé, seuls le Règlement et l'inscription publique restent accessibles
@@ -1827,20 +1839,27 @@ input[type=text],input[type=number],input[type=time],input[type=email],input[typ
 .rtab-active { background:var(--brand); color:#fff; border-color:var(--brand); }
 
 /* ── Login ── */
-#loginScreen { min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px; background:linear-gradient(160deg,#062a3d 0%,#0a4a52 45%,#0e6b52 100%); }
-.login-box { background:#0a1f2b; border-radius:18px; padding:30px 26px; max-width:420px; width:100%; box-shadow:0 18px 50px rgba(0,0,0,.35); }
-.login-brand { font-family:'Oswald',sans-serif; font-weight:700; font-size:24px; color:#8be8d8; text-align:center; margin-bottom:4px; }
-.login-sub { text-align:center; color:rgba(255,255,255,.55); font-size:13px; margin-bottom:20px; }
-.login-org-ttl { text-align:center; font-family:'Oswald',sans-serif; font-weight:700; font-size:12px; letter-spacing:1px; text-transform:uppercase; color:#cfe6ff; margin-bottom:12px; }
+#loginScreen {
+  min-height:100vh; display:flex; align-items:center; justify-content:center; padding:20px;
+  background:
+    radial-gradient(circle at 12% 15%, rgba(255,193,71,.45), transparent 42%),
+    radial-gradient(circle at 88% 12%, rgba(255,95,140,.38), transparent 45%),
+    radial-gradient(circle at 50% 100%, rgba(66,214,190,.30), transparent 55%),
+    linear-gradient(155deg,#2a0f52 0%,#7a1e6e 35%,#c1440e 72%,#f4a53a 100%);
+}
+.login-box { background:#170c2b; border-radius:18px; padding:30px 26px; max-width:420px; width:100%; box-shadow:0 18px 50px rgba(0,0,0,.4), 0 0 0 1px rgba(255,255,255,.06); }
+.login-brand { font-family:'Oswald',sans-serif; font-weight:700; font-size:24px; color:#ffd166; text-align:center; margin-bottom:4px; text-shadow:0 0 18px rgba(255,209,102,.35); }
+.login-sub { text-align:center; color:rgba(255,255,255,.6); font-size:13px; margin-bottom:20px; }
+.login-org-ttl { text-align:center; font-family:'Oswald',sans-serif; font-weight:700; font-size:12px; letter-spacing:1px; text-transform:uppercase; color:#d9c9ff; margin-bottom:12px; }
 .login-divider { display:flex; align-items:center; gap:10px; color:rgba(255,255,255,.4); font-size:11px; margin:16px 0; }
 .login-divider::before,.login-divider::after { content:''; flex:1; height:1px; background:rgba(255,255,255,.18); }
 #loginScreen input { background:rgba(255,255,255,.08); border:1px solid rgba(255,255,255,.25); color:#fff; margin-bottom:10px; color-scheme:dark; }
 #loginScreen input::placeholder { color:rgba(255,255,255,.4); }
 #authMsg { font-size:12px; min-height:16px; margin-bottom:10px; text-align:center; }
-.login-public-section { margin-bottom:22px; padding:18px 16px 16px; background:linear-gradient(135deg,#0f8a5f 0%,#0c6b6e 100%); border:1px solid rgba(255,255,255,.16); border-radius:14px; box-shadow:inset 0 1px 0 rgba(255,255,255,.08), 0 10px 26px rgba(10,80,60,.35); }
-.login-public-ttl { text-align:center; font-family:'Oswald',sans-serif; font-weight:700; font-size:12px; letter-spacing:1px; text-transform:uppercase; color:#eafff5; margin-bottom:4px; }
-.login-public-sub { text-align:center; color:rgba(255,255,255,.7); font-size:12px; margin-bottom:14px; }
-.login-org-section { padding:18px 16px 4px; background:linear-gradient(135deg,#12395e 0%,#1a4f7e 100%); border:1px solid rgba(255,255,255,.14); border-radius:14px; box-shadow:inset 0 1px 0 rgba(255,255,255,.06); }
+.login-public-section { margin-bottom:22px; padding:18px 16px 16px; background:linear-gradient(135deg,#ff7a45 0%,#ff5e8f 100%); border:1px solid rgba(255,255,255,.2); border-radius:14px; box-shadow:inset 0 1px 0 rgba(255,255,255,.15), 0 10px 26px rgba(200,50,90,.35); }
+.login-public-ttl { text-align:center; font-family:'Oswald',sans-serif; font-weight:700; font-size:12px; letter-spacing:1px; text-transform:uppercase; color:#fff8ef; margin-bottom:4px; }
+.login-public-sub { text-align:center; color:rgba(255,255,255,.85); font-size:12px; margin-bottom:14px; }
+.login-org-section { padding:18px 16px 4px; background:linear-gradient(135deg,#2e1a63 0%,#5834a8 100%); border:1px solid rgba(255,255,255,.16); border-radius:14px; box-shadow:inset 0 1px 0 rgba(255,255,255,.08); }
 .btn-google { display:flex; align-items:center; justify-content:center; gap:10px; width:100%; padding:12px 16px; background:#fff; border:none; border-radius:10px; font-family:'Oswald',sans-serif; font-size:15px; font-weight:600; color:#222; cursor:pointer; letter-spacing:.3px; margin-bottom:4px; transition:box-shadow .15s; }
 .btn-google:hover { box-shadow:0 2px 12px rgba(0,0,0,.25); }
 
@@ -1945,15 +1964,15 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
       <div class="login-public-ttl">👥 Espace public</div>
       <div class="login-public-sub">Spectateurs — aucune connexion requise</div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
-        <button onclick="enterLiveModeAndGo(4)" style="padding:13px 6px;background:rgba(255,80,60,.18);border:1.5px solid rgba(255,120,90,.55);border-radius:10px;color:#fff0ec;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:6px;grid-column:1 / -1"><span class="spec-nav-live-dot"></span> 🔴 Suivre le direct</button>
+        <button onclick="enterLiveModeAndGo(4)" style="padding:13px 6px;background:rgba(255,255,255,.22);border:1.5px solid rgba(255,255,255,.6);border-radius:10px;color:#fff;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:6px;grid-column:1 / -1;box-shadow:0 4px 14px rgba(0,0,0,.15)"><span class="spec-nav-live-dot"></span> 🔴 Suivre le direct</button>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
-        <button onclick="enterLiveModeAndGo('T')"  style="padding:13px 6px;background:rgba(255,255,255,.14);border:1.5px solid rgba(255,255,255,.3);border-radius:10px;color:#fff;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:5px">👥 ÉQUIPES</button>
-        <button onclick="enterLiveModeAndGo('R')"  style="padding:13px 6px;background:rgba(255,255,255,.14);border:1.5px solid rgba(255,255,255,.3);border-radius:10px;color:#fff;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:5px">📋 RÈGLEMENT</button>
-        <button onclick="enterLiveModeAndGo('TV')" style="padding:13px 6px;background:rgba(255,255,255,.14);border:1.5px solid rgba(255,255,255,.3);border-radius:10px;color:#fff;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:5px">📺 ÉCRAN</button>
+        <button onclick="enterLiveModeAndGo('T')"  style="padding:13px 6px;background:rgba(122,214,255,.28);border:1.5px solid rgba(122,214,255,.6);border-radius:10px;color:#fff;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:5px">👥 ÉQUIPES</button>
+        <button onclick="enterLiveModeAndGo('R')"  style="padding:13px 6px;background:rgba(255,214,102,.28);border:1.5px solid rgba(255,214,102,.6);border-radius:10px;color:#fff;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:5px">📋 RÈGLEMENT</button>
+        <button onclick="enterLiveModeAndGo('TV')" style="padding:13px 6px;background:rgba(200,150,255,.28);border:1.5px solid rgba(200,150,255,.6);border-radius:10px;color:#fff;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:5px">📺 ÉCRAN</button>
       </div>
-      <div id="loginRegisterBox" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.25);text-align:center">
-        <button onclick="enterLiveModeAndGo('REG')" style="width:100%;padding:13px 6px;background:rgba(255,255,255,.95);border:1.5px solid #fff;border-radius:10px;color:#134a3d;font-family:'Oswald',sans-serif;font-size:14px;font-weight:700;cursor:pointer;text-transform:uppercase">📝 Inscrire mon équipe</button>
+      <div id="loginRegisterBox" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.3);text-align:center">
+        <button onclick="enterLiveModeAndGo('REG')" style="width:100%;padding:13px 6px;background:rgba(255,255,255,.95);border:1.5px solid #fff;border-radius:10px;color:#c1440e;font-family:'Oswald',sans-serif;font-size:14px;font-weight:700;cursor:pointer;text-transform:uppercase">📝 Inscrire mon équipe</button>
       </div>
     </div>
 
