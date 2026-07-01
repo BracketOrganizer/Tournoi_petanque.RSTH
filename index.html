@@ -170,18 +170,6 @@ window.logout = async function() {
   USER_ROLE = 'spectator'; CURRENT_USER = null;
   showLogin();
 };
-// Fermeture instantanée (utilisée quand on quitte l'onglet / l'appli) : on
-// remet l'écran de connexion tout de suite, de façon synchrone, avant même
-// que la déconnexion Firebase ne soit terminée — pour garantir que la page
-// admin ne reste jamais visible si l'appareil est mis en veille juste après
-// avoir changé d'onglet ou d'application.
-function instantLockAdmin() {
-  unsubAll();
-  clearStaffActive();
-  USER_ROLE = 'spectator'; CURRENT_USER = null;
-  showLogin();
-  signOut(auth).catch(() => {});
-}
 function unsubAll() {
   if (unsubTournament) { unsubTournament(); unsubTournament = null; }
   if (unsubResults)    { unsubResults();    unsubResults = null; }
@@ -278,18 +266,13 @@ function applyRoleUI() {
 // ─── Live spectateur ──────────────────────────────────────
 window.enterLiveModeAndGo = async function(target) {
   USER_ROLE = 'spectator'; CURRENT_USER = null;
-  // Vérification fraîche de l'état du Live AVANT toute navigation : évite que la
-  // page reste sur une valeur mémoire obsolète (encore "ouvert") le temps que les
-  // abonnements Firestore se mettent à jour, ce qui laissait passer la page bloquée
-  // un court instant avant que le message ne s'affiche par-dessus.
-  try {
-    const snap = await getDoc(doc(db, 'petanque', 'status'));
-    if (snap.exists()) ST.liveOpen = snap.data().liveOpen === true;
-  } catch (e) {}
   showApp(); applyRoleUI();
   subscribeToTournamentPublic();
   subscribeToResultsPublic();
   startLiveWatch();
+  // applyRoleUI() peut avoir tenté une navigation par défaut (bloquée si le live
+  // est fermé) et affiché l'overlay avant même qu'on sache où l'utilisateur veut
+  // vraiment aller : on nettoie ça avant la navigation explicite ci-dessous.
   pendingSpecTarget = null;
   const overlayEl = document.getElementById('liveClosedOverlay');
   if (overlayEl) overlayEl.style.display = 'none';
@@ -306,22 +289,15 @@ function handleLiveOpenChange(nowOpen) {
   if (nowOpen) {
     if (overlay) overlay.style.display = 'none';
     if (pendingSpecTarget) { const t = pendingSpecTarget; pendingSpecTarget = null; goTo(t); }
-  } else if (USER_ROLE === 'spectator' && !LIVE_FREE_PAGES.includes(ST.page)) {
-    // Le Live vient de se fermer pendant que le spectateur consultait une page
-    // désormais restreinte : on retire réellement cette page (pas seulement un
-    // message par-dessus), afin qu'elle ne puisse pas réapparaître en fermant
-    // le message. Si le Live rouvre, on le ramène automatiquement où il était.
-    pendingSpecTarget = ST.page;
-    ST.page = null;
-    stopTVCycle();
-    document.body.classList.remove('tv-mode');
+  } else if (USER_ROLE === 'spectator' && overlay && !LIVE_FREE_PAGES.includes(ST.page)) {
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-    if (overlay) overlay.style.display = 'flex';
+    overlay.style.display = 'flex';
   }
 }
 function startLiveWatch() {
   stopLiveWatch();
-  unsubLiveWatch = onSnapshot(doc(db, 'petanque', 'status'), snap => {
+  unsubLiveWatch = onSnapshot(doc(db, 'petanque', 'status'), { includeMetadataChanges: true }, snap => {
+    if (snap.metadata.fromCache) return; // on ignore les lectures locales potentiellement périmées, on attend la confirmation serveur
     if (snap.exists()) handleLiveOpenChange(snap.data().liveOpen === true);
   }, () => {});
   liveWatchIv = setInterval(async () => {
@@ -399,7 +375,8 @@ function applyTournamentData(data) {
   ST.phase = data.phase || 'config';
   ST.activePoolRound = data.activePoolRound || 0;
   ST.activeBracketRound = data.activeBracketRound || { P: 0, C: 0 };
-  handleLiveOpenChange(data.liveOpen === true);
+  // liveOpen n'est plus lu depuis ce document : petanque/status (via startLiveWatch)
+  // est l'unique source de vérité pour éviter les courses entre deux écritures séparées.
   ST.registrationOpen = data.registrationOpen === true;
   ST.registrationMax = (data.registrationMax != null && data.registrationMax !== '') ? +data.registrationMax : null;
   updateRegistrationUI();
@@ -432,6 +409,12 @@ window.goTo = function(n) {
   if (USER_ROLE === 'scorer' && n !== 4) n = 4; // le rôle scoreur n'a accès qu'à la saisie des scores en direct
   if (!LIVE_FREE_PAGES.includes(n) && isLiveBlocked()) {
     pendingSpecTarget = n;
+    // Sécurité : si la page actuellement affichée (ex. héritée d'une session
+    // admin/scorer précédente) n'est pas non plus autorisée, on la neutralise
+    // pour qu'elle ne soit jamais visible en dessous de l'overlay.
+    if (!LIVE_FREE_PAGES.includes(ST.page)) {
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    }
     const overlay = document.getElementById('liveClosedOverlay');
     if (overlay) overlay.style.display = 'flex';
     return;
@@ -516,16 +499,6 @@ window.toggleRules = function() {
   ST.rulesOpen = !ST.rulesOpen;
   const el = document.getElementById('rulesModal');
   if (el) el.style.display = ST.rulesOpen ? 'flex' : 'none';
-};
-window.closeLiveClosedOverlay = function() {
-  const overlay = document.getElementById('liveClosedOverlay');
-  if (overlay) overlay.style.display = 'none';
-  pendingSpecTarget = null;
-  if (USER_ROLE === 'spectator') {
-    unsubAll();
-    USER_ROLE = null; CURRENT_USER = null; ST.page = 1; ST.regSubmitted = false;
-    showLogin();
-  }
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -2016,7 +1989,7 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
     <div style="font-size:40px;margin-bottom:10px">🔴</div>
     <div style="font-family:'Oswald',sans-serif;font-weight:700;margin-bottom:6px">Live actuellement fermé</div>
     <div style="font-size:13px;color:var(--muted);margin-bottom:14px">L'organisateur n'a pas encore ouvert l'accès en direct.</div>
-    <button class="btn btn-ghost btn-sm" onclick="closeLiveClosedOverlay()">Fermer</button>
+    <button class="btn btn-ghost btn-sm" onclick="pendingSpecTarget=null;document.getElementById('liveClosedOverlay').style.display='none'">Fermer</button>
   </div>
 </div>
 
