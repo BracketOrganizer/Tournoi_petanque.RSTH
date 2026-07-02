@@ -19,7 +19,7 @@
 <script type="module">
 import { initializeApp } from "firebase/app";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged,
-         createUserWithEmailAndPassword, GoogleAuthProvider, signInWithPopup,
+         createUserWithEmailAndPassword, GoogleAuthProvider, signInWithRedirect,
          setPersistence, inMemoryPersistence } from "firebase/auth";
 import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot,
          collection, getDocs, deleteDoc, increment } from "firebase/firestore";
@@ -150,7 +150,13 @@ onAuthStateChanged(auth, async (user) => {
 window.loginGoogle = async function() {
   const provider = new GoogleAuthProvider();
   try {
-    await signInWithPopup(auth, provider);
+    // signInWithRedirect au lieu de signInWithPopup : évite le blocage
+    // "Cross-Origin-Opener-Policy would block the window.closed call"
+    // que GitHub Pages déclenche avec les popups (impossible de personnaliser
+    // les en-têtes HTTP sur GitHub Pages, donc on contourne via une redirection).
+    await signInWithRedirect(auth, provider);
+    // Après la redirection, la page se recharge et onAuthStateChanged (déjà
+    // en place plus bas) détecte automatiquement la connexion réussie.
   } catch (e) {
     if (e.code !== 'auth/popup-closed-by-user' && e.code !== 'auth/cancelled-popup-request') {
       showAuthMsg(authErrMsg(e.code), 'var(--red)');
