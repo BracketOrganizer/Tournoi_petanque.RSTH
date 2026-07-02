@@ -19,7 +19,7 @@
 <script type="module">
 import { initializeApp } from "firebase/app";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged,
-         createUserWithEmailAndPassword, GoogleAuthProvider, signInWithRedirect, getRedirectResult,
+         createUserWithEmailAndPassword, GoogleAuthProvider, signInWithPopup,
          setPersistence, inMemoryPersistence } from "firebase/auth";
 import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot,
          collection, getDocs, deleteDoc, increment } from "firebase/firestore";
@@ -28,12 +28,12 @@ import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot,
 // FIREBASE — Projet tournoi-petanque-rsth
 // ═══════════════════════════════════════════════════════════
 const firebaseConfig = {
-  apiKey: "AIzaSyDxDZXcVeo1z92jruaYOcJc7Yo_YkEe6kA",
-  authDomain: "tournoi-de-petanque-rsth.firebaseapp.com",
-  projectId: "tournoi-de-petanque-rsth",
-  storageBucket: "tournoi-de-petanque-rsth.firebasestorage.app",
-  messagingSenderId: "100446891024",
-  appId: "1:100446891024:web:5f717265e874696a1dae95"
+  apiKey: "AIzaSyBMY0tl1T6Uuwnf3aEPgxJRsmgUhajrbEQ",
+  authDomain: "tournoi-de-petanque-rsth-6502a.firebaseapp.com",
+  projectId: "tournoi-de-petanque-rsth-6502a",
+  storageBucket: "tournoi-de-petanque-rsth-6502a.firebasestorage.app",
+  messagingSenderId: "22382523468",
+  appId: "1:22382523468:web:b31b7a57f7f304abd470e9"
 };
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -149,17 +149,13 @@ onAuthStateChanged(auth, async (user) => {
 window.loginGoogle = async function() {
   const provider = new GoogleAuthProvider();
   try {
-    await signInWithRedirect(auth, provider);
+    await signInWithPopup(auth, provider);
   } catch (e) {
-    showAuthMsg(authErrMsg(e.code), 'var(--red)');
+    if (e.code !== 'auth/popup-closed-by-user' && e.code !== 'auth/cancelled-popup-request') {
+      showAuthMsg(authErrMsg(e.code), 'var(--red)');
+    }
   }
 };
-// Au retour de la page Google (après signInWithRedirect), on récupère le résultat
-// pour afficher une éventuelle erreur — la connexion elle-même est ensuite gérée
-// automatiquement par onAuthStateChanged ci-dessus.
-getRedirectResult(auth).catch((e) => {
-  if (e && e.code) showAuthMsg(authErrMsg(e.code), 'var(--red)');
-});
 window.loginEmail = async function() {
   const email = document.getElementById('loginEmailInput').value.trim();
   const pass  = document.getElementById('loginPassInput').value;
@@ -242,8 +238,7 @@ function authErrMsg(code) {
     'auth/user-not-found': 'Aucun compte avec cet email.',
     'auth/wrong-password': 'Mot de passe incorrect.',
     'auth/invalid-credential': 'Identifiants incorrects.',
-    'auth/too-many-requests': 'Trop de tentatives, réessayez plus tard.',
-    'auth/unauthorized-domain': "Ce domaine n'est pas autorisé pour la connexion Google (à ajouter dans Firebase Console > Authentication > Settings > Domaines autorisés)."
+    'auth/too-many-requests': 'Trop de tentatives, réessayez plus tard.'
   };
   return map[code] || 'Erreur de connexion (' + code + ')';
 }
