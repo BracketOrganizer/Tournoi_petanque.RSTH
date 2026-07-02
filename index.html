@@ -20,7 +20,7 @@
 import { initializeApp } from "firebase/app";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged,
          createUserWithEmailAndPassword, GoogleAuthProvider, signInWithRedirect,
-         getRedirectResult, setPersistence, inMemoryPersistence } from "firebase/auth";
+         getRedirectResult, setPersistence, browserSessionPersistence } from "firebase/auth";
 import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot,
          collection, getDocs, deleteDoc, increment } from "firebase/firestore";
 
@@ -38,12 +38,12 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-// Aucune persistance de session : en cas de rechargement ou de réouverture de
-// l'appli (même si le navigateur garde techniquement l'onglet en mémoire), la
-// connexion admin/scoreur n'est jamais restaurée automatiquement — il faut se
-// reconnecter. Cela évite qu'un accès admin oublié ouvert ne réapparaisse plus
-// tard (par ex. si on rouvre l'appli en tant que spectateur ou scoreur).
-try { await setPersistence(auth, inMemoryPersistence); } catch (e) { console.warn('setPersistence', e); }
+// Persistance "session" : la connexion admin/scoreur survit au rechargement de
+// page (indispensable pour signInWithRedirect, qui recharge entièrement la
+// page lors de l'aller-retour vers Google), mais disparaît à la fermeture de
+// l'onglet/navigateur — elle n'est jamais "définitive". La déconnexion
+// automatique après inactivité (voir plus bas) reste par ailleurs active.
+try { await setPersistence(auth, browserSessionPersistence); } catch (e) { console.warn('setPersistence', e); }
 // Instance secondaire : permet à l'admin de créer des comptes scorer sans se déconnecter
 const secondaryApp = initializeApp(firebaseConfig, 'secondary');
 const secondaryAuth = getAuth(secondaryApp);
