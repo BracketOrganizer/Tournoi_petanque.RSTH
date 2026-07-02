@@ -19,13 +19,13 @@
 <script type="module">
 import { initializeApp } from "firebase/app";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged,
-         createUserWithEmailAndPassword, GoogleAuthProvider, signInWithRedirect, getRedirectResult,
+         createUserWithEmailAndPassword, GoogleAuthProvider, signInWithPopup,
          setPersistence, inMemoryPersistence } from "firebase/auth";
 import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot,
          collection, getDocs, deleteDoc, increment } from "firebase/firestore";
 
 // ═══════════════════════════════════════════════════════════
-// FIREBASE — Projet tournoi-petanque-rsth-6502a
+// FIREBASE — Projet tournoi-petanque-rsth
 // ═══════════════════════════════════════════════════════════
 const firebaseConfig = {
   apiKey: "AIzaSyBMY0tl1T6Uuwnf3aEPgxJRsmgUhajrbEQ",
@@ -149,17 +149,13 @@ onAuthStateChanged(auth, async (user) => {
 window.loginGoogle = async function() {
   const provider = new GoogleAuthProvider();
   try {
-    await signInWithRedirect(auth, provider);
+    await signInWithPopup(auth, provider);
   } catch (e) {
-    showAuthMsg(authErrMsg(e.code), 'var(--red)');
+    if (e.code !== 'auth/popup-closed-by-user' && e.code !== 'auth/cancelled-popup-request') {
+      showAuthMsg(authErrMsg(e.code), 'var(--red)');
+    }
   }
 };
-// Au retour de la page Google (après signInWithRedirect), on récupère le résultat
-// pour afficher une éventuelle erreur — la connexion elle-même est ensuite gérée
-// automatiquement par onAuthStateChanged ci-dessus.
-getRedirectResult(auth).catch((e) => {
-  if (e && e.code) showAuthMsg(authErrMsg(e.code), 'var(--red)');
-});
 window.loginEmail = async function() {
   const email = document.getElementById('loginEmailInput').value.trim();
   const pass  = document.getElementById('loginPassInput').value;
@@ -242,8 +238,7 @@ function authErrMsg(code) {
     'auth/user-not-found': 'Aucun compte avec cet email.',
     'auth/wrong-password': 'Mot de passe incorrect.',
     'auth/invalid-credential': 'Identifiants incorrects.',
-    'auth/too-many-requests': 'Trop de tentatives, réessayez plus tard.',
-    'auth/unauthorized-domain': "Ce domaine n'est pas autorisé pour la connexion Google (à ajouter dans Firebase Console > Authentication > Settings > Domaines autorisés)."
+    'auth/too-many-requests': 'Trop de tentatives, réessayez plus tard.'
   };
   return map[code] || 'Erreur de connexion (' + code + ')';
 }
