@@ -120,7 +120,8 @@ onAuthStateChanged(auth, async (user) => {
     try {
       const snap = await getDoc(doc(db, 'users', user.uid));
       if (snap.exists()) role = snap.data().role || 'spectator';
-    } catch (e) { console.warn('lecture rôle échouée', e); }
+      console.log('[DEBUG AUTH]', { email: user.email, uid: user.uid, docExists: snap.exists(), role });
+    } catch (e) { console.warn('lecture rôle échouée', e); console.log('[DEBUG AUTH] erreur lecture rôle', { email: user.email, uid: user.uid, error: e.code || e.message }); }
     // Sécurité supplémentaire : si une session admin/scoreur est restée inactive
     // trop longtemps (appli laissée ouverte en arrière-plan), on force la
     // déconnexion au lieu de rouvrir l'accès automatiquement.
