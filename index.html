@@ -16,1834 +16,6 @@
   }
 }
 </script>
-<script type="module">
-import { initializeApp } from "firebase/app";
-import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged,
-         createUserWithEmailAndPassword, GoogleAuthProvider, signInWithRedirect,
-         getRedirectResult, setPersistence, browserSessionPersistence } from "firebase/auth";
-import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot,
-         collection, getDocs, deleteDoc, increment } from "firebase/firestore";
-
-// ═══════════════════════════════════════════════════════════
-// FIREBASE — Projet tournoi-petanque-rsth
-// ═══════════════════════════════════════════════════════════
-const firebaseConfig = {
-  apiKey: "AIzaSyCQhLIo-WXurUBS0QEiOjjd9tby9IKHtGs",
-  authDomain: "tournoi-rsth-de-petanque.firebaseapp.com",
-  projectId: "tournoi-rsth-de-petanque",
-  storageBucket: "tournoi-rsth-de-petanque.firebasestorage.app",
-  messagingSenderId: "206862784229",
-  appId: "1:206862784229:web:bb3ec38b78fdfc6f67a60c"
-};
-
-const app = initializeApp(firebaseConfig);
-const auth = getAuth(app);
-const db = getFirestore(app);
-// Persistance "session" : la connexion admin/scoreur survit au rechargement de
-// page (indispensable pour signInWithRedirect, qui recharge entièrement la
-// page lors de l'aller-retour vers Google), mais disparaît à la fermeture de
-// l'onglet/navigateur — elle n'est jamais "définitive". La déconnexion
-// automatique après inactivité (voir plus bas) reste par ailleurs active.
-try { await setPersistence(auth, browserSessionPersistence); } catch (e) { console.warn('setPersistence', e); }
-// Instance secondaire : permet à l'admin de créer des comptes scorer sans se déconnecter
-const secondaryApp = initializeApp(firebaseConfig, 'secondary');
-const secondaryAuth = getAuth(secondaryApp);
-
-// ═══════════════════════════════════════════════════════════
-// ÉTAT GLOBAL
-// Rôles : 'admin' | 'scorer' | 'spectator'
-// Phase 1 : groupes de 4 (round-robin)
-// Phase 2 : tableau Principale (1ers + 2es) + Consolante (3es + 4es)
-//           en élimination directe avec petite finale
-// ═══════════════════════════════════════════════════════════
-let CURRENT_USER = null;
-let USER_ROLE = null;
-let unsubTournament = null;
-let unsubResults = null;
-let unsubLiveWatch = null;
-let liveWatchIv = null;
-let pendingSpecTarget = null;
-let tvCycleIv = null, tvClockIv = null, tvScrollIv = null;
-let tvScreenIndex = 0, tvLastPhase = null, tvLastScreensSig = null, tvLastRenderedKey = null;
-
-const ST = {
-  page: 1, prevPage: 1, rulesOpen: false,
-  teams: [],
-  groups: [],
-  poolSchedule: [],
-  brackets: { P: null, C: null },
-  results: {},
-  phase: 'config',   // 'config' | 'pools' | 'bracket' | 'done'
-  activePoolRound: 0,
-  activeBracketRound: { P: 0, C: 0 },
-  page4View: null,
-  liveOpen: false,
-  registrationOpen: false,
-  registrations: [],
-  regSubmitted: false,
-  registrationMax: null,
-  registrationCount: 0,
-  cfg: {
-    name: 'Trophée Pétanque Doublette — RSTH',
-    club: 'RSTH',
-    n: 16,
-    courts: 8,
-    mt: 45,
-    tt: 10,
-    start: '09:00',
-    scoreMax: 13,
-    ecart: 2,          // 2 points d'écart obligatoires
-    balance: 'level',
-    pauses: [], // [{id,label,mode:'afterRound'|'betweenPhases',afterRound,min}] — pauses programmées (déjeuner, café...)
-  }
-};
-
-function isAdmin()  { return USER_ROLE === 'admin'; }
-function isScorer() { return USER_ROLE === 'admin' || USER_ROLE === 'scorer'; }
-function isLiveBlocked() { return USER_ROLE === 'spectator' && !ST.liveOpen; }
-function shuffle(arr) { const a = arr.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
-function addMinutes(timeStr, mins) {
-  const [h, m] = (timeStr || '09:00').split(':').map(Number);
-  const total = h * 60 + m + mins;
-  const hh = Math.floor((total / 60 + 24 * 10) % 24), mm = ((total % 60) + 60) % 60;
-  return String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0');
-}
-function tObj(id)  { return ST.teams.find(t => t.id === id); }
-function tName(id) { const t = tObj(id); return t ? t.name : '?'; }
-function tClub(id) { const t = tObj(id); return t ? t.club : ''; }
-
-// ─── Auth & rôles ─────────────────────────────────────────
-onAuthStateChanged(auth, async (user) => {
-  if (user) {
-    CURRENT_USER = user;
-    let role = 'spectator';
-    try {
-      const snap = await getDoc(doc(db, 'users', user.uid));
-      if (snap.exists()) role = snap.data().role || 'spectator';
-    } catch (e) { console.warn('lecture rôle échouée', e); }
-    // Sécurité supplémentaire : si une session admin/scoreur est restée inactive
-    // trop longtemps (appli laissée ouverte en arrière-plan), on force la
-    // déconnexion au lieu de rouvrir l'accès automatiquement.
-    if (role === 'admin' || role === 'scorer') {
-      let last = 0;
-      try { last = parseInt(localStorage.getItem(LAST_ACTIVE_KEY) || '0', 10); } catch (e) {}
-      if (last && (Date.now() - last) > INACTIVITY_MS_STAFF) {
-        try { await signOut(auth); } catch (e) {}
-        CURRENT_USER = null; USER_ROLE = null;
-        showLogin();
-        return;
-      }
-    }
-    USER_ROLE = role;
-    showApp();
-    applyRoleUI();
-    subscribeToTournament();
-    subscribeToResults();
-    if (isAdmin()) subscribeToRegistrations();
-    resetInactivityTimer();
-  } else if (USER_ROLE !== 'spectator') {
-    CURRENT_USER = null; USER_ROLE = null;
-    showLogin();
-  }
-});
-
-window.loginGoogle = async function() {
-  const provider = new GoogleAuthProvider();
-  try {
-    showAuthMsg('Redirection vers Google...', 'var(--ink2)');
-    await signInWithRedirect(auth, provider);
-    // La page quitte l'appli ici ; le retour est géré par getRedirectResult() au chargement.
-  } catch (e) {
-    showAuthMsg(authErrMsg(e.code), 'var(--red)');
-  }
-};
-// Récupère le résultat de la connexion Google après le retour de redirection.
-// Doit être appelé au chargement, avant/en parallèle de onAuthStateChanged.
-getRedirectResult(auth).catch((e) => {
-  if (e && e.code) showAuthMsg(authErrMsg(e.code), 'var(--red)');
-});
-window.loginEmail = async function() {
-  const email = document.getElementById('loginEmailInput').value.trim();
-  const pass  = document.getElementById('loginPassInput').value;
-  if (!email || !pass) { showAuthMsg('Email et mot de passe requis.', 'var(--red)'); return; }
-  try { await signInWithEmailAndPassword(auth, email, pass); }
-  catch (e) { showAuthMsg(authErrMsg(e.code), 'var(--red)'); }
-};
-window.logout = async function() {
-  unsubAll();
-  clearStaffActive();
-  await signOut(auth);
-  USER_ROLE = 'spectator'; CURRENT_USER = null;
-  showLogin();
-};
-window.exitLiveClosedToHome = function() {
-  pendingSpecTarget = null;
-  const overlay = document.getElementById('liveClosedOverlay');
-  if (overlay) overlay.style.display = 'none';
-  unsubAll();
-  USER_ROLE = null; CURRENT_USER = null; ST.page = 1; ST.regSubmitted = false;
-  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  const p1 = document.getElementById('page1');
-  if (p1) p1.classList.add('active');
-  showLogin();
-};
-function unsubAll() {
-  if (unsubResults)    { unsubResults();    unsubResults = null; }
-  if (unsubLiveWatch)  { unsubLiveWatch();  unsubLiveWatch = null; }
-  if (liveWatchIv)     { clearInterval(liveWatchIv); liveWatchIv = null; }
-}
-// ─── Fermeture automatique après inactivité ────────────────
-// Évite qu'un accès (admin, scoreur ou public) reste ouvert indéfiniment
-// si on oublie de se déconnecter / fermer la page. Le mode Écran (TV),
-// destiné à rester affiché en continu, n'est jamais concerné.
-let inactivityTimer = null;
-const INACTIVITY_MS_STAFF  = 90 * 60 * 1000;  // 90 min pour admin / scoreur
-const INACTIVITY_MS_PUBLIC = 30 * 60 * 1000;  // 30 min pour public / spectateur / inscription
-const LAST_ACTIVE_KEY = 'petanqueRSTH_lastActive'; // horodatage pour détecter une session admin/scoreur oubliée
-function markStaffActive() {
-  if (USER_ROLE === 'admin' || USER_ROLE === 'scorer') {
-    try { localStorage.setItem(LAST_ACTIVE_KEY, String(Date.now())); } catch (e) {}
-  }
-}
-function clearStaffActive() {
-  try { localStorage.removeItem(LAST_ACTIVE_KEY); } catch (e) {}
-}
-function resetInactivityTimer() {
-  if (inactivityTimer) { clearTimeout(inactivityTimer); inactivityTimer = null; }
-  if (ST.page === 'TV') return; // le mode Écran reste affiché en continu, jamais de fermeture auto
-  if (!USER_ROLE) return;
-  markStaffActive();
-  const limit = (USER_ROLE === 'admin' || USER_ROLE === 'scorer') ? INACTIVITY_MS_STAFF : INACTIVITY_MS_PUBLIC;
-  inactivityTimer = setTimeout(handleInactivityTimeout, limit);
-}
-async function handleInactivityTimeout() {
-  if (ST.page === 'TV') return;
-  if (USER_ROLE === 'admin' || USER_ROLE === 'scorer') {
-    await window.logout();
-  } else if (USER_ROLE === 'spectator') {
-    unsubAll();
-    USER_ROLE = null; CURRENT_USER = null; ST.page = 1; ST.regSubmitted = false;
-    showLogin();
-  }
-}
-['click', 'keydown', 'mousemove', 'touchstart', 'scroll'].forEach(evt => document.addEventListener(evt, resetInactivityTimer, { passive: true }));
-// Si l'appli reste ouverte en arrière-plan (onglet minimisé, appli mobile en veille...),
-// le setTimeout ci-dessus peut ne pas s'exécuter fidèlement : on revérifie donc
-// l'ancienneté de la session dès que l'onglet redevient visible.
-document.addEventListener('visibilitychange', () => {
-  if (document.visibilityState !== 'visible') return;
-  if (USER_ROLE !== 'admin' && USER_ROLE !== 'scorer') return;
-  let last = 0;
-  try { last = parseInt(localStorage.getItem(LAST_ACTIVE_KEY) || '0', 10); } catch (e) {}
-  if (last && (Date.now() - last) > INACTIVITY_MS_STAFF) handleInactivityTimeout();
-  else resetInactivityTimer();
-});
-function authErrMsg(code) {
-  const map = {
-    'auth/invalid-email': 'Adresse email invalide.',
-    'auth/user-not-found': 'Aucun compte avec cet email.',
-    'auth/wrong-password': 'Mot de passe incorrect.',
-    'auth/invalid-credential': 'Identifiants incorrects.',
-    'auth/too-many-requests': 'Trop de tentatives, réessayez plus tard.',
-    'auth/unauthorized-domain': 'Ce site n\'est pas autorisé pour la connexion Google (domaine non déclaré dans Firebase).'
-  };
-  return map[code] || 'Erreur de connexion (' + code + ')';
-}
-function showAuthMsg(msg, color) {
-  const el = document.getElementById('authMsg');
-  if (el) { el.textContent = msg; el.style.color = color; }
-}
-function showLogin() {
-  document.getElementById('loginScreen').style.display = 'flex';
-  document.getElementById('appScreen').style.display = 'none';
-}
-function showApp() {
-  document.getElementById('loginScreen').style.display = 'none';
-  document.getElementById('appScreen').style.display = 'block';
-}
-function applyRoleUI() {
-  document.querySelectorAll('[data-role]').forEach(el => {
-    const need = el.dataset.role;
-    let show = false;
-    if (need === 'admin')  show = isAdmin();
-    if (need === 'scorer') show = isScorer();
-    el.style.display = show ? '' : 'none';
-  });
-  const badge = document.getElementById('roleBadge');
-  if (badge) badge.textContent = USER_ROLE === 'admin' ? '👑 Admin' : USER_ROLE === 'scorer' ? '🎯 Scorer' : '👁 Spectateur';
-  const specNav = document.getElementById('specNav');
-  if (specNav) specNav.style.display = USER_ROLE === 'spectator' ? 'flex' : 'none';
-  const stepNav = document.getElementById('stepNav');
-  if (stepNav) stepNav.style.display = isAdmin() ? '' : 'none';
-  if (USER_ROLE === 'spectator') goTo(ST.teams.length > 0 && ST.phase !== 'config' ? 4 : 'T');
-  else if (USER_ROLE === 'scorer') goTo(4);
-  else goTo(ST.phase === 'config' && ST.teams.length === 0 ? 1 : (ST.page === 1 ? 4 : ST.page));
-}
-
-// ─── Live spectateur ──────────────────────────────────────
-window.enterLiveModeAndGo = async function(target) {
-  // Le règlement est une simple modale indépendante de l'appli : on peut
-  // l'afficher directement depuis l'écran d'accueil, sans jamais entrer en
-  // mode spectateur ni afficher le bandeau applicatif.
-  if (target === 'R') { toggleRules(); return; }
-
-  // Pour tout le reste, sauf l'inscription publique (toujours libre), on
-  // vérifie l'état réel du live AVANT d'entrer dans l'appli : si c'est fermé,
-  // on reste simplement sur l'écran d'accueil avec un message, plutôt que
-  // d'afficher le bandeau applicatif derrière l'overlay de blocage.
-  if (target !== 'REG') {
-    let liveIsOpen = false;
-    try {
-      const snap = await getDoc(doc(db, 'petanque', 'status'));
-      liveIsOpen = snap.exists() && snap.data().liveOpen === true;
-    } catch (e) {}
-    if (!liveIsOpen) {
-      const msgEl = document.getElementById('specPublicMsg');
-      if (msgEl) msgEl.textContent = "🔴 Live actuellement fermé — l'organisateur n'a pas encore ouvert l'accès en direct.";
-      return;
-    }
-  }
-  const msgEl0 = document.getElementById('specPublicMsg');
-  if (msgEl0) msgEl0.textContent = '';
-
-  USER_ROLE = 'spectator'; CURRENT_USER = null;
-  // Important : on force aussi la déconnexion de la vraie session Firebase Auth.
-  // Sans ça, si l'utilisateur était (ou reste) connecté en admin/scorer, Firebase
-  // peut réaffirmer cette session à tout moment (rafraîchissement de token,
-  // reconnexion réseau...) et onAuthStateChanged remettrait alors USER_ROLE sur
-  // 'admin'/'scorer' — un rôle jamais bloqué par le live fermé, ce qui ouvrait
-  // le live en douce derrière le dos du blocage spectateur.
-  if (auth.currentUser) { try { await signOut(auth); } catch (e) {} }
-  showApp(); applyRoleUI();
-  subscribeToTournamentPublic();
-  subscribeToResultsPublic();
-  startLiveWatch();
-  // applyRoleUI() peut avoir tenté une navigation par défaut (bloquée si le live
-  // est fermé) et affiché l'overlay avant même qu'on sache où l'utilisateur veut
-  // vraiment aller : on nettoie ça avant la navigation explicite ci-dessous.
-  pendingSpecTarget = null;
-  const overlayEl = document.getElementById('liveClosedOverlay');
-  if (overlayEl) overlayEl.style.display = 'none';
-  if (target === 'TV') goTo('TV');
-  else if (target === 'T') goTo('T');
-  else if (target === 'REG') goTo('REG');
-  else if (target === 4) goTo(4);
-};
-const LIVE_FREE_PAGES = ['R', 'REG']; // si le Live est fermé, seuls le Règlement et l'inscription publique restent accessibles
-function handleLiveOpenChange(nowOpen) {
-  ST.liveOpen = nowOpen;
-  const overlay = document.getElementById('liveClosedOverlay');
-  if (nowOpen) {
-    if (overlay) overlay.style.display = 'none';
-    if (pendingSpecTarget) { const t = pendingSpecTarget; pendingSpecTarget = null; goTo(t); }
-  } else if (USER_ROLE === 'spectator' && overlay && !ST.rulesOpen && !LIVE_FREE_PAGES.includes(ST.page)) {
-    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-    overlay.style.display = 'flex';
-  }
-}
-function startLiveWatch() {
-  stopLiveWatch();
-  unsubLiveWatch = onSnapshot(doc(db, 'petanque', 'status'), { includeMetadataChanges: true }, snap => {
-    if (snap.metadata.fromCache) return; // on ignore les lectures locales potentiellement périmées, on attend la confirmation serveur
-    if (snap.exists()) handleLiveOpenChange(snap.data().liveOpen === true);
-  }, () => {});
-  liveWatchIv = setInterval(async () => {
-    try { const snap = await getDoc(doc(db, 'petanque', 'status')); if (snap.exists()) handleLiveOpenChange(snap.data().liveOpen === true); } catch (e) {}
-  }, 20000);
-}
-function stopLiveWatch() {
-  if (unsubLiveWatch) { unsubLiveWatch(); unsubLiveWatch = null; }
-  if (liveWatchIv)    { clearInterval(liveWatchIv); liveWatchIv = null; }
-}
-function updateRegistrationUI() {
-  const box = document.getElementById('loginRegisterBox');
-  if (box) box.style.display = ST.registrationOpen ? 'block' : 'none';
-  const navBtn = document.getElementById('specNavRegBtn');
-  if (navBtn) navBtn.style.display = (USER_ROLE === 'spectator' && ST.registrationOpen) ? '' : 'none';
-  if (ST.page === 'REG') renderRegisterPage();
-}
-// Surveillance publique très légère : permet d'afficher le bouton "Inscrire mon
-// équipe" sur l'écran de connexion, avant même qu'un rôle (spectateur/staff) soit choisi.
-onSnapshot(doc(db, 'petanque', 'status'), snap => {
-  if (snap.exists()) {
-    const d = snap.data();
-    ST.registrationOpen = d.registrationOpen === true;
-    ST.registrationCount = d.registrationCount || 0;
-    updateRegistrationUI();
-  }
-}, () => {});
-
-// ─── Firestore — abonnements ──────────────────────────────
-function subscribeToTournamentPublic() {
-  unsubTournament = onSnapshot(doc(db, 'petanque', 'current'), snap => {
-    if (!snap.exists()) return;
-    applyTournamentData(snap.data());
-    if (ST.teams.length > 0 && ST.phase !== 'config' && ST.page < 4 && USER_ROLE === 'spectator') goTo(4);
-  }, e => console.warn('subscribeToTournamentPublic', e));
-}
-function subscribeToResultsPublic() {
-  unsubResults = onSnapshot(collection(db, 'petanque_results'), snap => {
-    snap.docChanges().forEach(ch => {
-      if (ch.type === 'removed') delete ST.results[ch.doc.id];
-      else ST.results[ch.doc.id] = normalizeResult(ch.doc.data());
-    });
-    refreshCurrentPage();
-  }, () => {});
-}
-function subscribeToTournament() {
-  unsubTournament = onSnapshot(doc(db, 'petanque', 'current'), snap => {
-    if (!snap.exists()) return;
-    applyTournamentData(snap.data());
-    updateLiveToggleBtn();
-    updateRegistrationToggleBtn();
-    if (isAdmin() && ST.page === 1) syncCfgForm();
-    refreshCurrentPage();
-  }, e => console.warn('subscribeToTournament', e));
-}
-function subscribeToResults() {
-  unsubResults = onSnapshot(collection(db, 'petanque_results'), snap => {
-    snap.docChanges().forEach(ch => {
-      if (ch.type === 'removed') delete ST.results[ch.doc.id];
-      else ST.results[ch.doc.id] = normalizeResult(ch.doc.data());
-    });
-    refreshCurrentPage();
-  }, () => {});
-}
-function applyTournamentData(data) {
-  Object.assign(ST.cfg, data.cfg || {});
-  if (!Array.isArray(ST.cfg.pauses)) ST.cfg.pauses = [];
-  if (!ST.cfg.pauses.length && data.cfg && data.cfg.pauseEnabled) {
-    ST.cfg.pauses = [{ id: 'pz-migre', label: 'Pause déjeuner', mode: data.cfg.pauseMode || 'afterRound', afterRound: data.cfg.pauseAfter || 1, min: data.cfg.pauseMin || 60 }];
-  }
-  ST.teams = data.teams || [];
-  ST.groups = data.groups || [];
-  ST.poolSchedule = data.poolSchedule || [];
-  ST.brackets = data.brackets || { P: null, C: null };
-  ST.phase = data.phase || 'config';
-  ST.activePoolRound = data.activePoolRound || 0;
-  ST.activeBracketRound = data.activeBracketRound || { P: 0, C: 0 };
-  // liveOpen n'est plus lu depuis ce document : petanque/status (via startLiveWatch)
-  // est l'unique source de vérité pour éviter les courses entre deux écritures séparées.
-  ST.registrationOpen = data.registrationOpen === true;
-  ST.registrationMax = (data.registrationMax != null && data.registrationMax !== '') ? +data.registrationMax : null;
-  updateRegistrationUI();
-  refreshCurrentPage();
-}
-function normalizeResult(data) { return { ga: data.ga != null ? data.ga : '', gb: data.gb != null ? data.gb : '', bye: !!data.bye }; }
-async function saveTournament(patch) {
-  try { await setDoc(doc(db, 'petanque', 'current'), patch, { merge: true }); }
-  catch (e) { console.error('saveTournament', e); alert('Erreur de sauvegarde : ' + e.message); }
-}
-async function saveResult(matchId, ga, gb, bye) {
-  try { await setDoc(doc(db, 'petanque_results', matchId), { ga, gb, bye: !!bye }, { merge: true }); }
-  catch (e) { console.error('saveResult', e); }
-}
-
-// ─── Navigation ───────────────────────────────────────────
-function refreshCurrentPage() {
-  if (ST.page === 1) syncCfgForm();
-  if (ST.page === 2) renderTeamsPage();
-  if (ST.page === 3) renderPlanningPreview();
-  if (ST.page === 4) renderTournamentPage();
-  if (ST.page === 5) renderFinalPage();
-  if (ST.page === 'T') renderTeamsSpecPage();
-  if (ST.page === 'REG') renderRegisterPage();
-  if (ST.page === 'TV') renderTVContent();
-  updateLiveToggleBtn();
-  updateRegistrationToggleBtn();
-}
-window.goTo = function(n) {
-  if (USER_ROLE === 'scorer' && n !== 4) n = 4; // le rôle scoreur n'a accès qu'à la saisie des scores en direct
-  if (!LIVE_FREE_PAGES.includes(n) && isLiveBlocked()) {
-    pendingSpecTarget = n;
-    // Sécurité : si la page actuellement affichée (ex. héritée d'une session
-    // admin/scorer précédente) n'est pas non plus autorisée, on la neutralise
-    // pour qu'elle ne soit jamais visible en dessous de l'overlay.
-    if (!LIVE_FREE_PAGES.includes(ST.page)) {
-      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-    }
-    const overlay = document.getElementById('liveClosedOverlay');
-    if (overlay) overlay.style.display = 'flex';
-    return;
-  }
-  ST.prevPage = ST.page; ST.page = n;
-  stopTVCycle();
-  document.body.classList.toggle('tv-mode', n === 'TV');
-  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  updateSpecNavForPage(n);
-  resetInactivityTimer();
-  if (n === 'T') {
-    document.getElementById('pageT').classList.add('active');
-    renderTeamsSpecPage();
-    document.querySelectorAll('.spec-nav-btn').forEach(b => b.classList.toggle('spec-nav-active', b.dataset.target === 'T'));
-    return;
-  }
-  if (n === 'REG') {
-    document.getElementById('pageREG').classList.add('active');
-    renderRegisterPage();
-    document.querySelectorAll('.spec-nav-btn').forEach(b => b.classList.toggle('spec-nav-active', b.dataset.target === 'REG'));
-    return;
-  }
-  if (n === 'TV') {
-    document.getElementById('pageTV').classList.add('active');
-    renderTVPage(); startTVCycle();
-    document.querySelectorAll('.spec-nav-btn').forEach(b => b.classList.toggle('spec-nav-active', b.dataset.target === 'TV'));
-    return;
-  }
-  document.getElementById('page' + n).classList.add('active');
-  document.getElementById('backBtn').style.display = (isAdmin() && n > 1) ? '' : 'none';
-  updateFwdBtn();
-  updateSteps(n);
-  document.querySelectorAll('.spec-nav-btn').forEach(b => b.classList.toggle('spec-nav-active', b.dataset.target == ('' + n)));
-  window.scrollTo(0, 0);
-  syncDrawerButtons();
-  if (n === 1) syncCfgForm();
-  if (n === 2) renderTeamsPage();
-  if (n === 3) renderPlanningPreview();
-  if (n === 4) renderTournamentPage();
-  if (n === 5) renderFinalPage();
-};
-// Depuis la page d'inscription publique, on ne doit pouvoir consulter que le
-// Règlement — pas le Live, le Classement, les Équipes ni l'Écran.
-function updateSpecNavForPage(n) {
-  const restricted = n === 'REG';
-  ['4', '5', 'T', 'TV'].forEach(t => {
-    const btn = document.querySelector(`.spec-nav-btn[data-target="${t}"]`);
-    if (btn) btn.style.display = restricted ? 'none' : '';
-  });
-}
-window.goBack = function() { if (ST.page > 1 && typeof ST.page === 'number') goTo(ST.page - 1); };
-function canGoFwd() {
-  if (ST.page === 1) return true;
-  if (ST.page === 2) return ST.teams.length === ST.cfg.n;
-  if (ST.page === 3) return ST.poolSchedule.length > 0;
-  return false;
-}
-function updateFwdBtn() {
-  const el = document.getElementById('fwdBtn'); if (!el) return;
-  el.style.display = (isAdmin() && ST.page >= 1 && ST.page <= 2) ? '' : 'none';
-  el.disabled = !canGoFwd();
-}
-window.goFwd = function() { if (ST.page === 1) goTo(2); else if (ST.page === 2 && ST.teams.length === ST.cfg.n) goTo(3); };
-function updateSteps(n) {
-  document.querySelectorAll('.step').forEach(s => {
-    const sn = +s.dataset.s; s.classList.remove('active', 'done');
-    if (sn === n) s.classList.add('active'); else if (sn < n) s.classList.add('done');
-    const num = s.querySelector('.step-n'); if (num) num.textContent = sn < n ? '✓' : sn;
-  });
-}
-window.spectatorGoLive = async function(n) {
-  try { const snap = await getDoc(doc(db, 'petanque', 'status')); if (snap.exists()) handleLiveOpenChange(snap.data().liveOpen === true); } catch (e) {}
-  if (!LIVE_FREE_PAGES.includes(n) && isLiveBlocked()) {
-    pendingSpecTarget = n;
-    const overlay = document.getElementById('liveClosedOverlay');
-    if (overlay) overlay.style.display = 'flex';
-    return;
-  }
-  goTo(n);
-};
-window.toggleRules = function() {
-  ST.rulesOpen = !ST.rulesOpen;
-  const el = document.getElementById('rulesModal');
-  if (el) el.style.display = ST.rulesOpen ? 'flex' : 'none';
-  if (!ST.rulesOpen) handleLiveOpenChange(ST.liveOpen); // ré-applique immédiatement le verrou si besoin, sans attendre le prochain signal Firestore
-};
-
-// ═══════════════════════════════════════════════════════════
-// CONFIGURATION
-// ═══════════════════════════════════════════════════════════
-function syncCfgForm() {
-  const c = ST.cfg;
-  const set = (id, v) => { const el = document.getElementById(id); if (el && document.activeElement !== el) el.value = v; };
-  set('cfgName', c.name); set('cfgClub', c.club);
-  set('cfgN', c.n); set('cfgCourts', c.courts);
-  set('cfgMt', c.mt); set('cfgTt', c.tt); set('cfgStart', c.start);
-  set('cfgScoreMax', c.scoreMax); set('cfgEcart', c.ecart);
-  const bal = document.getElementById('cfgBalance'); if (bal) bal.value = c.balance;
-  renderPausesEditor();
-  renderCfgSummary();
-}
-function pauseSummaryText(p) {
-  return p.mode === 'betweenPhases'
-    ? `${p.label || 'Pause'} de <strong>${p.min} min</strong> entre la Phase 1 et la Phase 2`
-    : `${p.label || 'Pause'} de <strong>${p.min} min</strong> après le tour <strong>${p.afterRound}</strong>`;
-}
-function renderCfgSummary() {
-  const el = document.getElementById('cfgSummary'); if (!el) return;
-  const c = ST.cfg;
-  const numGroups = computeGroupSizes(c.n).length;
-  const nPrincipale = numGroups * 2, nConsolante = c.n - nPrincipale;
-  const pauses = Array.isArray(c.pauses) ? c.pauses : [];
-  const pauseTxt = pauses.length ? ' · 🍽️ ' + pauses.map(pauseSummaryText).join(' · ') : '';
-  el.innerHTML = `<div class="info info-b">
-    🎯 <strong>${c.n}</strong> équipes (${c.n * 2} joueurs) · <strong>${numGroups}</strong> groupes de 4 en Phase 1 ·
-    <strong>${c.courts}</strong> terrains · partie ≈ <strong>${c.mt} min</strong> (+${c.tt} min battement) ·
-    Score : <strong>${c.scoreMax} pts</strong> avec <strong>${c.ecart} pts d'écart</strong> min${pauseTxt}<br>
-    📊 Phase 2 : <strong>${nPrincipale}</strong> équipes en Principale · <strong>${nConsolante}</strong> en Consolante
-  </div>`;
-}
-function renderPausesEditor() {
-  const el = document.getElementById('pausesEditorEl'); if (!el) return;
-  const pauses = Array.isArray(ST.cfg.pauses) ? ST.cfg.pauses : [];
-  if (!pauses.length) { el.innerHTML = '<div class="info info-b">Aucune pause programmée.</div>'; return; }
-  el.innerHTML = pauses.map(p => `
-    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:var(--s1);border:1px solid var(--bdr);border-radius:10px;padding:8px 10px;margin-bottom:6px">
-      <input type="text" value="${p.label || ''}" style="width:140px" placeholder="Nom (ex: Pause déjeuner)" onchange="onPauseFieldChange('${p.id}','label',this.value)">
-      <select onchange="onPauseFieldChange('${p.id}','mode',this.value)">
-        <option value="afterRound" ${p.mode === 'afterRound' ? 'selected' : ''}>Après le tour de poules n°</option>
-        <option value="betweenPhases" ${p.mode === 'betweenPhases' ? 'selected' : ''}>Entre Phase 1 et Phase 2</option>
-      </select>
-      ${p.mode === 'afterRound' ? `<input type="number" min="1" max="20" value="${p.afterRound || 1}" style="width:60px" onchange="onPauseFieldChange('${p.id}','afterRound',this.value)">` : ''}
-      <span style="display:flex;align-items:center;gap:4px"><input type="number" min="0" max="240" value="${p.min || 0}" style="width:70px" onchange="onPauseFieldChange('${p.id}','min',this.value)"> min</span>
-      <button class="btn btn-ghost btn-xs" onclick="removePauseRow('${p.id}')" style="color:var(--red)">✕ Retirer</button>
-    </div>`).join('');
-}
-window.addPauseRow = function() {
-  if (!Array.isArray(ST.cfg.pauses)) ST.cfg.pauses = [];
-  ST.cfg.pauses.push({ id: 'pz' + Date.now() + Math.floor(Math.random() * 1000), label: ST.cfg.pauses.length ? 'Pause' : 'Pause déjeuner', mode: 'afterRound', afterRound: 1, min: 20 });
-  renderPausesEditor(); renderCfgSummary();
-  if (isAdmin()) saveTournament({ cfg: ST.cfg });
-};
-window.removePauseRow = function(id) {
-  ST.cfg.pauses = (ST.cfg.pauses || []).filter(p => p.id !== id);
-  renderPausesEditor(); renderCfgSummary();
-  if (isAdmin()) saveTournament({ cfg: ST.cfg });
-};
-window.onPauseFieldChange = function(id, field, value) {
-  const p = (ST.cfg.pauses || []).find(x => x.id === id); if (!p) return;
-  if (field === 'min' || field === 'afterRound') value = Math.max(field === 'afterRound' ? 1 : 0, +value || 0);
-  p[field] = value;
-  if (field === 'mode') renderPausesEditor();
-  renderCfgSummary();
-  if (isAdmin()) saveTournament({ cfg: ST.cfg });
-};
-window.onCfgChange = function() {
-  ST.cfg.name   = document.getElementById('cfgName').value.trim() || 'Trophée Pétanque Doublette';
-  ST.cfg.club   = document.getElementById('cfgClub').value.trim();
-  ST.cfg.n      = Math.max(16, Math.min(64, +document.getElementById('cfgN').value || 16));
-  ST.cfg.courts = Math.max(8,  Math.min(32, +document.getElementById('cfgCourts').value || 8));
-  ST.cfg.mt     = Math.max(20, Math.min(90, +document.getElementById('cfgMt').value || 45));
-  ST.cfg.tt     = Math.max(0,  Math.min(30, +document.getElementById('cfgTt').value || 10));
-  ST.cfg.start  = document.getElementById('cfgStart').value || '09:00';
-  ST.cfg.scoreMax = Math.max(11, Math.min(25, +document.getElementById('cfgScoreMax').value || 13));
-  ST.cfg.ecart  = Math.max(1,  Math.min(3, +document.getElementById('cfgEcart').value || 2));
-  ST.cfg.balance = document.getElementById('cfgBalance').value || 'level';
-  renderCfgSummary();
-  document.title = '🎯 ' + ST.cfg.name;
-  const brandEl = document.getElementById('hdrBrandText'); if (brandEl) brandEl.textContent = '🎯 ' + ST.cfg.name;
-};
-window.saveCfgAndNext = async function() {
-  onCfgChange();
-  await saveTournament({ cfg: ST.cfg });
-  goTo(2);
-};
-window.goToPlanningFromTeams = function() {
-  if (ST.teams.length !== ST.cfg.n) { alert(`Il faut exactement ${ST.cfg.n} équipes (actuellement ${ST.teams.length}).`); return; }
-  goTo(3);
-};
-
-// ═══════════════════════════════════════════════════════════
-// ÉQUIPES
-// ═══════════════════════════════════════════════════════════
-function renderTeamsPage() {
-  const el = document.getElementById('teamsListEl'); if (!el) return;
-  const need = ST.cfg.n - ST.teams.length;
-  const counterEl = document.getElementById('teamsCounter');
-  if (counterEl) counterEl.innerHTML = need > 0
-    ? `<span style="color:var(--ylw)">⚠ Encore ${need} équipe${need > 1 ? 's' : ''} à ajouter (objectif : ${ST.cfg.n})</span>`
-    : `<span style="color:var(--grn)">✓ ${ST.teams.length} équipes sur ${ST.cfg.n}</span>`;
-  el.innerHTML = ST.teams.map((t, i) => `
-    <div style="display:flex;align-items:center;gap:10px;background:var(--s1);border:1px solid var(--bdr);border-radius:10px;padding:10px 14px;margin-bottom:6px">
-      <div style="font-family:'Oswald',sans-serif;font-weight:700;color:var(--dim);width:28px">${i + 1}</div>
-      <div style="flex:1">
-        <div style="font-weight:700">${t.name}</div>
-        <div style="font-size:12px;color:var(--muted)">${t.p1} · ${t.p2}${t.club ? ' — ' + t.club : ''} ${'⭐'.repeat(t.lv || 3)}</div>
-      </div>
-      ${isAdmin() ? `<button class="btn btn-ghost btn-xs" onclick="openEditTeam('${t.id}')">✏️</button>
-      <button class="btn btn-ghost btn-xs" onclick="removeTeam('${t.id}')" style="color:var(--red)">🗑️</button>` : ''}
-    </div>`).join('') || '<div class="info info-b">Aucune équipe pour le moment.</div>';
-  updateFwdBtn();
-}
-window.openEditTeam = function(id) {
-  const t = id ? tObj(id) : { id: null, name: '', p1: '', p2: '', club: ST.cfg.club || '', lv: 3 };
-  document.getElementById('editTeamId').value = t.id || '';
-  document.getElementById('editP1').value = t.p1 || '';
-  document.getElementById('editP2').value = t.p2 || '';
-  document.getElementById('editClub').value = t.club || '';
-  document.getElementById('editLv').value = t.lv || 3;
-  document.getElementById('editTeamModal').style.display = 'flex';
-  document.getElementById('editTeamTitle').textContent = id ? 'Modifier l\'équipe' : 'Nouvelle équipe';
-};
-window.closeEditTeam = function() { document.getElementById('editTeamModal').style.display = 'none'; };
-window.saveEditTeam = async function() {
-  const id   = document.getElementById('editTeamId').value;
-  const p1   = document.getElementById('editP1').value.trim();
-  const p2   = document.getElementById('editP2').value.trim();
-  const club = document.getElementById('editClub').value.trim();
-  const lv   = +document.getElementById('editLv').value || 3;
-  if (!p1 || !p2) { alert('Les deux noms de joueurs sont requis.'); return; }
-  const name = p1 + ' / ' + p2;
-  if (id) {
-    const t = tObj(id); Object.assign(t, { p1, p2, club, lv, name });
-  } else {
-    if (ST.teams.length >= ST.cfg.n) { alert('Nombre d\'équipes déjà atteint (' + ST.cfg.n + ').'); return; }
-    ST.teams.push({ id: 't' + Date.now() + Math.floor(Math.random() * 1000), p1, p2, club, lv, name });
-  }
-  await saveTournament({ teams: ST.teams });
-  closeEditTeam(); renderTeamsPage();
-};
-window.removeTeam = async function(id) {
-  if (!confirm('Retirer cette équipe ?')) return;
-  ST.teams = ST.teams.filter(t => t.id !== id);
-  await saveTournament({ teams: ST.teams }); renderTeamsPage();
-};
-window.clearTeams = async function() {
-  if (!confirm('Vider toute la liste des équipes ?')) return;
-  ST.teams = []; await saveTournament({ teams: [] }); renderTeamsPage();
-};
-window.autoFillTeams = async function() {
-  const need = ST.cfg.n - ST.teams.length; if (need <= 0) return;
-  const clubs = ['RSTH','APC','Lauzerte','Montauban','Caussade','Moissac'];
-  for (let i = 0; i < need; i++) {
-    const k = ST.teams.length + 1;
-    ST.teams.push({ id: 't' + Date.now() + i, p1: 'Joueur ' + (k*2-1), p2: 'Joueur ' + (k*2),
-      club: clubs[i % clubs.length], lv: (i % 5) + 1, name: 'Joueur ' + (k*2-1) + ' / Joueur ' + (k*2) });
-  }
-  await saveTournament({ teams: ST.teams }); renderTeamsPage();
-};
-
-// ═══════════════════════════════════════════════════════════
-// PHASE 1 — GROUPES DE 4 (round-robin)
-// ═══════════════════════════════════════════════════════════
-function computeGroupSizes(n) {
-  let numGroups = Math.max(1, Math.round(n / 4));
-  while (n / numGroups > 5) numGroups++;
-  while (numGroups > 1 && n / numGroups < 3) numGroups--;
-  const base = Math.floor(n / numGroups), extra = n % numGroups;
-  const sizes = [];
-  for (let i = 0; i < numGroups; i++) sizes.push(base + (i < extra ? 1 : 0));
-  return sizes;
-}
-function buildGroupsPhase1() {
-  const sizes = computeGroupSizes(ST.teams.length);
-  const numGroups = sizes.length;
-  const pool = ST.cfg.balance === 'level'
-    ? ST.teams.slice().sort((a, b) => (b.lv || 3) - (a.lv || 3)).map(t => t.id)
-    : shuffle(ST.teams.map(t => t.id));
-  const groups = sizes.map((sz, i) => ({ id: 'G' + (i + 1), teamIds: [] }));
-  pool.forEach((tid, i) => { groups[i % numGroups].teamIds.push(tid); });
-  return groups;
-}
-function roundRobinPairs(teamIds) {
-  let arr = teamIds.slice();
-  const hasBye = arr.length % 2 === 1;
-  if (hasBye) arr.push(null);
-  const n = arr.length, rounds = [];
-  for (let r = 0; r < n - 1; r++) {
-    const pairs = [];
-    for (let i = 0; i < n / 2; i++) {
-      const a = arr[i], b = arr[n - 1 - i];
-      if (a !== null && b !== null) pairs.push([a, b]);
-    }
-    rounds.push(pairs);
-    arr = [arr[0], arr[n - 1], ...arr.slice(1, n - 1)];
-  }
-  return rounds;
-}
-function buildPoolSchedule() {
-  const courts = ST.cfg.courts, mt = ST.cfg.mt, tt = ST.cfg.tt || 10, start = ST.cfg.start || '09:00';
-  const pauses = Array.isArray(ST.cfg.pauses) ? ST.cfg.pauses : [];
-  const afterRoundPauses = pauses.filter(p => p.mode === 'afterRound' && (+p.afterRound || 0) > 0 && (+p.min || 0) > 0);
-  const groupRounds = ST.groups.map(g => roundRobinPairs(g.teamIds));
-  const maxRounds = Math.max(0, ...groupRounds.map(r => r.length));
-  const schedule = []; let counter = 0, elapsed = 0;
-  for (let r = 0; r < maxRounds; r++) {
-    const roundMatches = [];
-    ST.groups.forEach((g, gi) => { (groupRounds[gi][r] || []).forEach(([a, b]) => roundMatches.push({ group: g.id, a, b })); });
-    const waveCount = Math.max(1, Math.ceil(roundMatches.length / courts));
-    for (let w = 0; w < waveCount; w++) {
-      const waveTime = addMinutes(start, elapsed);
-      roundMatches.slice(w * courts, (w + 1) * courts).forEach((m, ci) => {
-        schedule.push({ matchId: 'p1-' + m.group + '-' + (counter++), group: m.group, round: r, wave: w, court: ci + 1, time: waveTime, a: m.a, b: m.b });
-      });
-      elapsed += mt + tt;
-    }
-    afterRoundPauses.forEach(p => { if (+p.afterRound === (r + 1)) elapsed += +p.min; });
-  }
-  return schedule;
-}
-function getPoolResult(matchId) { const d = ST.results[matchId] || {}; return { ga: d.ga != null ? d.ga : '', gb: d.gb != null ? d.gb : '' }; }
-window.setPoolResult = async function(matchId, f, v) {
-  if (!isScorer()) return;
-  const cur = ST.results[matchId] || { ga: '', gb: '' };
-  cur[f] = v === '' ? '' : Math.max(0, Math.min(ST.cfg.scoreMax + 5, +v));
-  ST.results[matchId] = cur;
-  await saveResult(matchId, cur.ga, cur.gb, false);
-  refreshCurrentPage();
-};
-function computeGroupStandings(groupId) {
-  const g = ST.groups.find(x => x.id === groupId); if (!g) return [];
-  const stats = {};
-  g.teamIds.forEach(id => stats[id] = { id, pts: 0, j: 0, w: 0, l: 0, bp: 0, bc: 0, diff: 0 });
-  ST.poolSchedule.filter(m => m.group === groupId).forEach(m => {
-    const r = getPoolResult(m.matchId);
-    if (r.ga === '' || r.gb === '') return;
-    const ga = +r.ga, gb = +r.gb;
-    if (!stats[m.a] || !stats[m.b]) return;
-    stats[m.a].j++; stats[m.b].j++;
-    stats[m.a].bp += ga; stats[m.a].bc += gb;
-    stats[m.b].bp += gb; stats[m.b].bc += ga;
-    // Critère victoire avec 2 pts d'écart
-    if (ga > gb) { stats[m.a].w++; stats[m.a].pts += 2; stats[m.b].l++; }
-    else         { stats[m.b].w++; stats[m.b].pts += 2; stats[m.a].l++; }
-  });
-  Object.values(stats).forEach(s => s.diff = s.bp - s.bc);
-  // Tiebreakers : pts > diff général > bp marqués > confrontation directe
-  const list = Object.values(stats);
-  list.sort((a, b) => {
-    if (b.pts !== a.pts) return b.pts - a.pts;
-    // Confrontation directe si ex-æquo
-    const matchAB = ST.poolSchedule.find(m => m.group === groupId && ((m.a===a.id&&m.b===b.id)||(m.a===b.id&&m.b===a.id)));
-    if (matchAB) {
-      const r = getPoolResult(matchAB.matchId);
-      if (r.ga !== '' && r.gb !== '') {
-        const gaA = matchAB.a===a.id ? +r.ga : +r.gb;
-        const gaB = matchAB.a===b.id ? +r.ga : +r.gb;
-        if (gaA !== gaB) return gaB - gaA;
-      }
-    }
-    if (b.diff !== a.diff) return b.diff - a.diff;
-    return b.bp - a.bp;
-  });
-  return list;
-}
-function isGroupDone(groupId) {
-  return ST.poolSchedule.filter(m => m.group === groupId).every(m => { const r = getPoolResult(m.matchId); return r.ga !== '' && r.gb !== ''; });
-}
-function allPoolsDone() { return ST.groups.length > 0 && ST.groups.every(g => isGroupDone(g.id)); }
-
-function renderPlanningPreview() {
-  const el = document.getElementById('planningPreviewEl'); if (!el) return;
-  if (!ST.groups.length) ST.groups = buildGroupsPhase1();
-  if (!ST.poolSchedule.length) ST.poolSchedule = buildPoolSchedule();
-  const numRounds = Math.max(0, ...ST.poolSchedule.map(m => m.round)) + 1;
-  const endTime = ST.poolSchedule.length > 0 ? ST.poolSchedule[ST.poolSchedule.length - 1].time : '--:--';
-  const pausesList = Array.isArray(ST.cfg.pauses) ? ST.cfg.pauses : [];
-  const pauseTxt = pausesList.length ? ' · 🍽️ ' + pausesList.map(p => 'prévue : ' + pauseSummaryText(p)).join(' · ') : '';
-  el.innerHTML = `
-    <div class="info info-b" style="margin-bottom:12px">📋 <strong>${ST.groups.length}</strong> groupes · <strong>${ST.poolSchedule.length}</strong> matchs de phase 1 répartis sur <strong>${numRounds}</strong> tour${numRounds>1?'s':''} · Dernier match prévu vers <strong>${endTime}</strong>${pauseTxt}</div>
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin:14px 0">
-      ${ST.groups.map(g => `<div style="background:var(--s1);border:1px solid var(--bdr);border-radius:10px;padding:10px 12px">
-        <div style="font-family:'Oswald',sans-serif;font-weight:700;color:var(--brand);margin-bottom:6px">Groupe ${g.id.slice(1)}</div>
-        ${g.teamIds.map(id => `<div style="font-size:13px;padding:2px 0">${tName(id)} <span style="color:var(--muted);font-size:11px">${tClub(id)?'— '+tClub(id):''}</span></div>`).join('')}
-      </div>`).join('')}
-    </div>
-    ${isAdmin() ? `<div style="display:flex;gap:10px;flex-wrap:wrap">
-      <button class="btn btn-ghost btn-sm" onclick="regeneratePlanning()">🔄 Régénérer (nouveau tirage)</button>
-      <button class="btn btn-b btn-sm" onclick="startTournament()">▶️ Démarrer le tournoi</button>
-    </div>` : ''}
-  `;
-}
-window.regeneratePlanning = async function() {
-  if (!confirm('Régénérer un nouveau tirage des groupes ?')) return;
-  ST.groups = buildGroupsPhase1(); ST.poolSchedule = buildPoolSchedule();
-  await saveTournament({ groups: ST.groups, poolSchedule: ST.poolSchedule });
-  renderPlanningPreview();
-};
-window.startTournament = async function() {
-  if (!isAdmin()) return;
-  if (!confirm('Démarrer le tournoi ? Les équipes et groupes seront verrouillés.')) return;
-  ST.phase = 'pools'; ST.activePoolRound = 0;
-  await saveTournament({ groups: ST.groups, poolSchedule: ST.poolSchedule, phase: 'pools', activePoolRound: 0, liveOpen: true });
-  goTo(4);
-};
-
-// ═══════════════════════════════════════════════════════════
-// PHASE 2 — TABLEAUX Principale & Consolante
-// ═══════════════════════════════════════════════════════════
-function nextPow2(n) { let p = 1; while (p < n) p *= 2; return p; }
-function seedOrder(size) {
-  let order = [1, 2];
-  while (order.length < size) {
-    const len = order.length * 2, next = [];
-    order.forEach(s => { next.push(s); next.push(len + 1 - s); });
-    order = next;
-  }
-  return order;
-}
-function buildBracketSeeds(seedsArray) {
-  const N = seedsArray.length;
-  if (N === 0) return null;
-  if (N === 1) return { slots: [seedsArray[0].teamId], depth: 0, teamCount: 1, autoWinner: seedsArray[0].teamId };
-  const size = nextPow2(N);
-  const order = seedOrder(size);
-  const slots = order.map(seedNum => seedNum <= N ? seedsArray[seedNum - 1].teamId : null);
-  const groupOf = {}; seedsArray.forEach(s => groupOf[s.teamId] = s.groupId);
-  // Éviter confrontations du même groupe au tour 1
-  for (let pass = 0; pass < 4; pass++) {
-    let conflict = false;
-    for (let i = 0; i < slots.length; i += 2) {
-      const a = slots[i], b = slots[i + 1];
-      if (a == null || b == null) continue;
-      if (groupOf[a] && groupOf[a] === groupOf[b]) {
-        conflict = true;
-        for (let j = i + 2; j < slots.length; j += 2) {
-          const c = slots[j]; if (c == null) continue;
-          if (groupOf[c] !== groupOf[a]) { slots[j] = b; slots[i + 1] = c; break; }
-        }
-      }
-    }
-    if (!conflict) break;
-  }
-  const byeMatches = [];
-  for (let i = 0; i < slots.length; i += 2) {
-    const a = slots[i], b = slots[i + 1];
-    if ((a == null) !== (b == null)) byeMatches.push({ idx: i / 2 });
-  }
-  return { slots, depth: Math.log2(size), teamCount: N, byeRound0: byeMatches.map(m => m.idx) };
-}
-window.buildBrackets = async function() {
-  if (!isAdmin()) return;
-  if (!allPoolsDone()) { alert('Impossible : tous les matchs de poules doivent être terminés.'); return; }
-  const rank1 = [], rank2 = [], rest = [];
-  ST.groups.forEach(g => {
-    const st = computeGroupStandings(g.id);
-    st.forEach((s, rank) => {
-      const obj = { teamId: s.id, groupId: g.id };
-      if (rank === 0) rank1.push(obj);
-      else if (rank === 1) rank2.push(obj);
-      else rest.push(obj);
-    });
-  });
-  const principaleSeeds = rank1.concat(rank2.slice().reverse());
-  const consolanteSeeds = rest;
-  ST.brackets = { P: buildBracketSeeds(principaleSeeds), C: buildBracketSeeds(consolanteSeeds) };
-  // Walkovers immédiats
-  ['P', 'C'].forEach(bk => {
-    const br = ST.brackets[bk]; if (!br || !br.byeRound0) return;
-    br.byeRound0.forEach(idx => {
-      const { a, b } = bracketMatchTeams(bk, 0, idx);
-      const winner = a ?? b;
-      if (winner) {
-        const id = bracketMatchId(bk, 0, idx);
-        ST.results[id] = { ga: a ? ST.cfg.scoreMax : 0, gb: b ? ST.cfg.scoreMax : 0, bye: true };
-        saveResult(id, ST.results[id].ga, ST.results[id].gb, true);
-      }
-    });
-  });
-  ST.phase = 'bracket'; ST.activeBracketRound = { P: 0, C: 0 };
-  await saveTournament({ brackets: ST.brackets, phase: 'bracket', activeBracketRound: { P: 0, C: 0 } });
-  goTo(4);
-};
-function bracketMatchId(bracket, round, idx) { return 'br-' + bracket + '-r' + round + '-m' + idx; }
-function bracketMatchTeams(bracket, round, idx) {
-  const br = ST.brackets[bracket]; if (!br) return { a: null, b: null };
-  if (round === 0) return { a: br.slots[idx * 2] ?? null, b: br.slots[idx * 2 + 1] ?? null };
-  return { a: bracketWinner(bracket, round - 1, idx * 2), b: bracketWinner(bracket, round - 1, idx * 2 + 1) };
-}
-function getBracketResult(bracket, round, idx) {
-  const id = bracketMatchId(bracket, round, idx);
-  const d = ST.results[id] || {};
-  return { ga: d.ga != null ? d.ga : '', gb: d.gb != null ? d.gb : '', bye: !!d.bye };
-}
-function bracketWinner(bracket, round, idx) {
-  const { a, b } = bracketMatchTeams(bracket, round, idx);
-  if (a == null && b == null) return null;
-  if (a == null) return b; if (b == null) return a;
-  const r = getBracketResult(bracket, round, idx);
-  if (r.ga === '' || r.gb === '') return null;
-  return (+r.ga > +r.gb) ? a : b;
-}
-function bracketLoser(bracket, round, idx) {
-  const { a, b } = bracketMatchTeams(bracket, round, idx);
-  if (a == null || b == null) return null;
-  const r = getBracketResult(bracket, round, idx);
-  if (r.ga === '' || r.gb === '') return null;
-  return (+r.ga > +r.gb) ? b : a;
-}
-// ═══════════════════════════════════════════════════════════
-// SYSTÈME GÉNÉRIQUE DE CLASSEMENT COMPLET (perdants rejouent)
-// Chaque perdant (sauf le perdant de la toute dernière finale d'un
-// groupe, qui prend automatiquement la 2e place) rejoint un mini-
-// tableau formé avec les autres perdants de son tour, qui est lui
-// même classé par élimination directe + classement, de façon
-// récursive. Résultat : toutes les équipes jouent le même nombre
-// de matchs (= profondeur du tableau), perdants compris.
-// ═══════════════════════════════════════════════════════════
-function nodeMatchId(bracket, path, round, idx) {
-  if (!path.length) return bracketMatchId(bracket, round, idx);
-  return 'br-' + bracket + '-cl' + path.join('-') + '-r' + round + '-m' + idx;
-}
-function nodeMatchTeams(bracket, node, path, round, idx) {
-  if (!path.length) return bracketMatchTeams(bracket, round, idx);
-  if (round === 0) return { a: node.slots[idx * 2] ?? null, b: node.slots[idx * 2 + 1] ?? null };
-  return { a: nodeWinner(bracket, node, path, round - 1, idx * 2), b: nodeWinner(bracket, node, path, round - 1, idx * 2 + 1) };
-}
-function nodeResultOf(bracket, path, round, idx) {
-  if (!path.length) return getBracketResult(bracket, round, idx);
-  const id = nodeMatchId(bracket, path, round, idx);
-  const d = ST.results[id] || {};
-  return { ga: d.ga != null ? d.ga : '', gb: d.gb != null ? d.gb : '', bye: !!d.bye };
-}
-function nodeWinner(bracket, node, path, round, idx) {
-  if (!path.length) return bracketWinner(bracket, round, idx);
-  const { a, b } = nodeMatchTeams(bracket, node, path, round, idx);
-  if (a == null && b == null) return null;
-  if (a == null) return b; if (b == null) return a;
-  const r = nodeResultOf(bracket, path, round, idx);
-  if (r.ga === '' || r.gb === '') return null;
-  return (+r.ga > +r.gb) ? a : b;
-}
-function nodeLoser(bracket, node, path, round, idx) {
-  if (!path.length) return bracketLoser(bracket, round, idx);
-  const { a, b } = nodeMatchTeams(bracket, node, path, round, idx);
-  if (a == null || b == null) return null;
-  const r = nodeResultOf(bracket, path, round, idx);
-  if (r.ga === '' || r.gb === '') return null;
-  return (+r.ga > +r.gb) ? b : a;
-}
-function nodeRoundMatchCount(node, round) { return node.slots.length / Math.pow(2, round + 1); }
-function isMatchDone(bracket, node, path, round, idx) {
-  const { a, b } = nodeMatchTeams(bracket, node, path, round, idx);
-  if (a == null || b == null) return true;
-  const r = nodeResultOf(bracket, path, round, idx);
-  return r.ga !== '' && r.gb !== '';
-}
-function isNodeRoundDone(bracket, node, path, round) {
-  const n = nodeRoundMatchCount(node, round);
-  for (let idx = 0; idx < n; idx++) if (!isMatchDone(bracket, node, path, round, idx)) return false;
-  return true;
-}
-// Construit (à la volée, déterministe) le mini-tableau formé par les perdants
-// réels d'un tour donné d'un noeud. Retourne null tant que le tour n'est pas
-// terminé ou s'il n'y a aucun perdant réel (tour 100% exempts).
-function getLoserSubNode(bracket, node, path, round) {
-  if (round >= node.depth - 1) return null;
-  if (!isNodeRoundDone(bracket, node, path, round)) return null;
-  const n = nodeRoundMatchCount(node, round);
-  const losers = [];
-  for (let idx = 0; idx < n; idx++) { const l = nodeLoser(bracket, node, path, round, idx); if (l) losers.push({ teamId: l, groupId: null }); }
-  if (!losers.length) return null;
-  return buildBracketSeeds(losers);
-}
-// Classement complet (relatif 1..teamCount) d'un noeud, perdants inclus.
-function rankNode(bracket, node, path) {
-  if (!node || !node.teamCount) return [];
-  if (node.depth === 0) return node.autoWinner ? [{ teamId: node.autoWinner, place: 1 }] : [];
-  const out = []; let place = 1;
-  const fr = node.depth - 1;
-  const w = nodeWinner(bracket, node, path, fr, 0);
-  const l = nodeLoser(bracket, node, path, fr, 0);
-  if (w) { out.push({ teamId: w, place }); place++; }
-  if (l) { out.push({ teamId: l, place }); place++; }
-  for (let r = fr - 1; r >= 0; r--) {
-    const sub = getLoserSubNode(bracket, node, path, r);
-    if (sub) {
-      rankNode(bracket, sub, [...path, r]).forEach(x => out.push({ teamId: x.teamId, place: place + x.place - 1, tied: x.tied }));
-      place += sub.teamCount;
-    } else {
-      const n = nodeRoundMatchCount(node, r);
-      const losers = [];
-      for (let idx = 0; idx < n; idx++) { const lo = nodeLoser(bracket, node, path, r, idx); if (lo) losers.push(lo); }
-      if (losers.length) { losers.forEach(tid => out.push({ teamId: tid, place, tied: true })); place += losers.length; }
-    }
-  }
-  return out;
-}
-// Liste, pour chaque "tour global" (0..depth-1), tous les matchs à jouer
-// (tableau principal + tous les mini-tableaux de classement déjà formés).
-// Un mini-tableau né des perdants du tour g démarre au tour global g+1 —
-// si bien que toutes les équipes jouent exactement `depth` matchs au total.
-function collectGlobalRoundMatches(bracket) {
-  const br = ST.brackets[bracket];
-  const out = [];
-  if (!br || !br.teamCount || br.depth === 0) return out;
-  for (let g = 0; g < br.depth; g++) out.push([]);
-  (function walk(node, path, startGlobal) {
-    for (let j = 0; j < node.depth; j++) {
-      const g = startGlobal + j;
-      if (g < out.length) {
-        const n = nodeRoundMatchCount(node, j);
-        for (let idx = 0; idx < n; idx++) out[g].push({ node, path, round: j, idx });
-      }
-      if (j < node.depth - 1) {
-        const sub = getLoserSubNode(bracket, node, path, j);
-        if (sub) walk(sub, [...path, j], g + 1);
-      }
-    }
-  })(br, [], 0);
-  return out;
-}
-// ── Places en jeu (calcul exact, sans ambiguïté) ──
-// Seul le tout dernier groupe (perdants du tout premier tour) peut être
-// réduit par des exempts ; tous les autres groupes ont une taille idéale
-// fixe qui ne dépend que de la profondeur du tableau, donc on peut annoncer
-// les places en jeu dès qu'un match existe, sans attendre la fin du tableau.
-function idealGroupSizes(depth, teamCount) {
-  if (depth <= 0) return [Math.max(1, teamCount)];
-  if (depth === 1) return [teamCount];
-  const sizes = [2]; let sum = 2;
-  for (let r = depth - 2; r >= 1; r--) { const s = Math.pow(2, depth - 1 - r); sizes.push(s); sum += s; }
-  sizes.push(Math.max(0, teamCount - sum));
-  return sizes;
-}
-function computeAbsolutePlaceOffset(bracket, path) {
-  let node = ST.brackets[bracket], nodePath = [], offset = 0;
-  for (let i = 0; i < path.length; i++) {
-    const r = path[i];
-    const sizes = idealGroupSizes(node.depth, node.teamCount);
-    const k = node.depth - 1 - r;
-    for (let j = 0; j < k && j < sizes.length; j++) offset += sizes[j];
-    const sub = getLoserSubNode(bracket, node, nodePath, r);
-    if (!sub) return offset;
-    node = sub; nodePath = [...nodePath, r];
-  }
-  return offset;
-}
-// Renvoie ce qui se joue lors du match (bracket,node,path,round) :
-// - si c'est le dernier tour du noeud : les 2 (ou 1) places qu'il attribue directement.
-// - sinon : la fourchette de places garantie au perdant, et la meilleure fourchette
-//   encore accessible au gagnant.
-function nodePlaceStakes(bracket, node, path, round) {
-  const offset = computeAbsolutePlaceOffset(bracket, path);
-  if (round === node.depth - 1) {
-    const lo = offset + 1, hi = offset + Math.min(2, node.teamCount);
-    return { isFinal: true, lo, hi };
-  }
-  const sizes = idealGroupSizes(node.depth, node.teamCount);
-  const k = node.depth - 1 - round;
-  let before = 0; for (let j = 0; j < k; j++) before += sizes[j] || 0;
-  const subSize = sizes[k] || 0;
-  return { isFinal: false, winnerLo: offset + 1, winnerHi: offset + before, loserLo: offset + before + 1, loserHi: offset + before + subSize };
-}
-// ── Horaires estimés Phase 2 ──
-// Le nombre de matchs par tour global est structurellement déterminé (dépend
-// de la profondeur du tableau, pas des résultats) sauf pour la toute dernière
-// branche de classement, donc on peut estimer un horaire dès la composition
-// des tableaux, comme pour la Phase 1.
-function theoreticalGlobalRoundMatchCounts(bracket) {
-  const br = ST.brackets[bracket];
-  const counts = [];
-  if (!br || !br.teamCount || br.depth === 0) return counts;
-  for (let g = 0; g < br.depth; g++) counts.push(0);
-  (function walk(depth, teamCount, startGlobal) {
-    if (depth <= 0 || teamCount <= 0) return;
-    for (let j = 0; j < depth; j++) {
-      const g = startGlobal + j;
-      const slotsLen = Math.pow(2, depth);
-      const matchCount = slotsLen / Math.pow(2, j + 1);
-      if (g < counts.length) counts[g] += matchCount;
-      if (j < depth - 1) {
-        const sizes = idealGroupSizes(depth, teamCount);
-        const k = depth - 1 - j;
-        const subTeamCount = sizes[k] || 0;
-        if (subTeamCount > 0) {
-          const subDepth = subTeamCount <= 1 ? 0 : Math.ceil(Math.log2(subTeamCount));
-          walk(subDepth, subTeamCount, g + 1);
-        }
-      }
-    }
-  })(br.depth, br.teamCount, 0);
-  return counts;
-}
-function computeBracketRoundTimes() {
-  const countsP = theoreticalGlobalRoundMatchCounts('P');
-  const countsC = theoreticalGlobalRoundMatchCounts('C');
-  const maxG = Math.max(countsP.length, countsC.length);
-  const courts = ST.cfg.courts || 8, mt = ST.cfg.mt || 45, tt = ST.cfg.tt || 10;
-  const lastPool = ST.poolSchedule.length ? ST.poolSchedule[ST.poolSchedule.length - 1].time : (ST.cfg.start || '09:00');
-  let bracketStart = ST.poolSchedule.length ? addMinutes(lastPool, mt + tt) : (ST.cfg.start || '09:00');
-  const betweenPauses = (Array.isArray(ST.cfg.pauses) ? ST.cfg.pauses : []).filter(p => p.mode === 'betweenPhases' && (+p.min || 0) > 0);
-  betweenPauses.forEach(p => { bracketStart = addMinutes(bracketStart, +p.min); });
-  const times = []; let elapsed = 0;
-  for (let g = 0; g < maxG; g++) {
-    times.push(addMinutes(bracketStart, elapsed));
-    const total = (countsP[g] || 0) + (countsC[g] || 0);
-    const waves = Math.max(1, Math.ceil(total / courts));
-    elapsed += waves * (mt + tt);
-  }
-  return times;
-}
-function bracketRoundName(depth, round) {
-  const remaining = depth - round;
-  const names = { 1: 'Finale', 2: 'Demi-finale', 3: 'Quart de finale', 4: '8e de finale', 5: '16e de finale', 6: '32e de finale' };
-  return names[remaining] || (remaining + 'e tour');
-}
-function bracketRoundMatchCount(bracket, round) {
-  const br = ST.brackets[bracket]; if (!br) return 0;
-  return br.slots.length / Math.pow(2, round + 1);
-}
-function isBracketRoundDone(bracket, round) {
-  const n = bracketRoundMatchCount(bracket, round);
-  for (let idx = 0; idx < n; idx++) {
-    const { a, b } = bracketMatchTeams(bracket, round, idx);
-    if (a == null || b == null) continue;
-    const r = getBracketResult(bracket, round, idx);
-    if (r.ga === '' || r.gb === '') return false;
-  }
-  return true;
-}
-window.setNodeResult = async function(bracket, pathStr, round, idx, f, v) {
-  if (!isScorer()) return;
-  const path = pathStr ? pathStr.split('-').map(Number) : [];
-  const id = nodeMatchId(bracket, path, round, idx);
-  const cur = ST.results[id] || { ga: '', gb: '' };
-  cur[f] = v === '' ? '' : Math.max(0, Math.min(ST.cfg.scoreMax + 5, +v));
-  ST.results[id] = cur;
-  await saveResult(id, cur.ga, cur.gb, false);
-  refreshCurrentPage();
-};
-function updateBuildBracketsBtn() {
-  const btn = document.getElementById('buildBracketsBtn'); if (!btn) return;
-  const missing = ST.groups.reduce((sum, g) => sum + ST.poolSchedule.filter(m => m.group === g.id).filter(m => { const r = getPoolResult(m.matchId); return !(r.ga !== '' && r.gb !== ''); }).length, 0);
-  btn.disabled = missing > 0;
-  btn.title = missing > 0 ? `${missing} match(s) de poule restant(s)` : 'Toutes les poules sont terminées';
-  btn.textContent = missing > 0 ? `🔒 Tableaux Phase 2 (${missing} match${missing > 1 ? 's' : ''} restant${missing > 1 ? 's' : ''})` : '2️⃣ Composer les tableaux (Phase 2)';
-}
-
-// ═══════════════════════════════════════════════════════════
-// CLASSEMENT FINAL
-// ═══════════════════════════════════════════════════════════
-function computeFinalRanking() {
-  const ranking = []; let baseOffset = 0;
-  ['P', 'C'].forEach(bk => {
-    const br = ST.brackets[bk]; if (!br || !br.teamCount) return;
-    const label = bk === 'P' ? 'Principale' : 'Consolante';
-    const ranked = rankNode(bk, br, []).sort((a, b) => a.place - b.place);
-    ranked.forEach(r => ranking.push({ place: baseOffset + r.place, teamId: r.teamId, label, tied: r.tied }));
-    baseOffset += br.teamCount;
-  });
-  return ranking;
-}
-function renderFinalPage() {
-  const el = document.getElementById('finalRankingTable'); if (!el) return;
-  const ranking = computeFinalRanking();
-  if (!ranking.length) { el.innerHTML = '<div class="info info-b">Le classement final s\'affichera une fois la phase 2 lancée.</div>'; return; }
-  const med = ['🥇', '🥈', '🥉'];
-  const podium = ranking.slice(0, 3);
-  el.innerHTML = `
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px">
-      ${podium.map(r => `<div style="background:var(--s1);border:2px solid var(--brand);border-radius:12px;padding:16px;text-align:center">
-        <div style="font-size:32px">${med[r.place - 1] || r.place}</div>
-        <div style="font-family:'Oswald',sans-serif;font-weight:700;margin-top:6px">${tName(r.teamId)}</div>
-        <div style="font-size:11px;color:var(--muted)">${tClub(r.teamId)}</div>
-      </div>`).join('')}
-    </div>
-    <table style="width:100%;border-collapse:collapse">
-      <thead><tr style="border-bottom:2px solid var(--bdr)">
-        <th style="text-align:left;padding:8px">Place</th>
-        <th style="text-align:left;padding:8px">Équipe</th>
-        <th style="text-align:left;padding:8px">Joueurs</th>
-        <th style="text-align:left;padding:8px">Club</th>
-        <th style="text-align:left;padding:8px">Tableau</th>
-      </tr></thead>
-      <tbody>${ranking.map(r => `<tr style="border-bottom:1px solid var(--bdr)">
-        <td style="padding:8px;font-weight:700">${r.tied ? '≈ ' : ''}${r.place}${r.place <= 3 ? med[r.place - 1] : ''}</td>
-        <td style="padding:8px;font-weight:600">${tName(r.teamId)}</td>
-        <td style="padding:8px;font-size:12px;color:var(--muted)">${tObj(r.teamId)?.p1} · ${tObj(r.teamId)?.p2}</td>
-        <td style="padding:8px;font-size:12px;color:var(--muted)">${tClub(r.teamId)}</td>
-        <td style="padding:8px;color:var(--muted);font-size:12px">${r.label}</td>
-      </tr>`).join('')}</tbody>
-    </table>`;
-}
-
-// ═══════════════════════════════════════════════════════════
-// RENDU — PAGE 4 TOURNOI EN DIRECT
-// ═══════════════════════════════════════════════════════════
-function scoreInputHTML(ga, gb, onA, onB, disabled) {
-  if (disabled) {
-    return `<span style="font-family:'Oswald',sans-serif;font-weight:700;font-size:20px">${ga === '' ? '–' : ga}</span>
-      <span style="opacity:.5">–</span>
-      <span style="font-family:'Oswald',sans-serif;font-weight:700;font-size:20px">${gb === '' ? '–' : gb}</span>`;
-  }
-  return `<input type="number" min="0" max="${ST.cfg.scoreMax + 5}" value="${ga}" placeholder="0"
-    style="width:52px;text-align:center;font-family:'Oswald',sans-serif;font-weight:700;font-size:18px;border:1px solid var(--bdr2);border-radius:6px;padding:4px"
-    onchange="${onA}">
-    <span style="opacity:.5">–</span>
-    <input type="number" min="0" max="${ST.cfg.scoreMax + 5}" value="${gb}" placeholder="0"
-    style="width:52px;text-align:center;font-family:'Oswald',sans-serif;font-weight:700;font-size:18px;border:1px solid var(--bdr2);border-radius:6px;padding:4px"
-    onchange="${onB}">`;
-}
-function poolMatchCardHTML(m) {
-  const r = getPoolResult(m.matchId);
-  const done = r.ga !== '' && r.gb !== '';
-  const ecartOk = done && Math.abs(+r.ga - +r.gb) >= ST.cfg.ecart;
-  const warn = done && !ecartOk ? `<span style="color:var(--ylw);font-size:11px">⚠ écart < ${ST.cfg.ecart} pts</span>` : '';
-  return `<div style="background:var(--s1);border:1px solid ${done?(ecartOk?'var(--grn)':'var(--ylw)'):'var(--bdr)'};border-radius:10px;padding:10px 14px;margin-bottom:8px">
-    <div style="font-size:11px;color:var(--muted);display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px">
-      <span>Groupe ${m.group.slice(1)} · Terrain ${m.court}</span><span>${m.time || ''}</span>${warn}
-    </div>
-    <div style="display:flex;align-items:center;gap:10px;margin-top:6px">
-      <div style="flex:1;font-weight:600">${tName(m.a)}</div>
-      ${scoreInputHTML(r.ga, r.gb, `setPoolResult('${m.matchId}','ga',this.value)`, `setPoolResult('${m.matchId}','gb',this.value)`, !isScorer())}
-      <div style="flex:1;font-weight:600;text-align:right">${tName(m.b)}</div>
-    </div>
-  </div>`;
-}
-function renderPoolsRoundTabs() {
-  const el = document.getElementById('poolRoundTabs'); if (!el) return;
-  const numRounds = Math.max(0, ...ST.poolSchedule.map(m => m.round)) + 1;
-  el.innerHTML = Array.from({ length: numRounds }, (_, r) => {
-    const done = ST.poolSchedule.filter(m => m.round === r).every(m => { const rr = getPoolResult(m.matchId); return rr.ga !== '' && rr.gb !== ''; });
-    return `<button class="rtab ${ST.activePoolRound === r ? 'rtab-active' : ''}" onclick="setPoolRound(${r})">Tour ${r + 1} ${done ? '✓' : ''}</button>`;
-  }).join('');
-}
-window.setPoolRound = async function(r) {
-  ST.activePoolRound = r;
-  if (isAdmin()) await saveTournament({ activePoolRound: r });
-  renderPoolsView();
-};
-function renderPoolsView() {
-  renderPoolsRoundTabs();
-  const el = document.getElementById('poolMatchListEl'); if (!el) return;
-  const matches = ST.poolSchedule.filter(m => m.round === ST.activePoolRound).sort((a, b) => a.court - b.court);
-  el.innerHTML = matches.map(poolMatchCardHTML).join('') || '<div class="info info-b">Aucun match pour ce tour.</div>';
-  renderPoolStandingsPanel();
-}
-function renderPoolStandingsPanel() {
-  const el = document.getElementById('poolStandingsPanel'); if (!el) return;
-  updateBuildBracketsBtn();
-  el.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">` +
-    ST.groups.map(g => {
-      const st = computeGroupStandings(g.id);
-      return `<div style="background:var(--s1);border:1px solid var(--bdr);border-radius:8px;padding:8px 10px;overflow-x:auto">
-        <div style="font-family:'Oswald',sans-serif;font-weight:700;color:var(--brand);margin-bottom:4px">Groupe ${g.id.slice(1)}</div>
-        <table style="width:100%;border-collapse:collapse;font-size:12px">
-          <thead><tr style="color:var(--muted)"><th style="text-align:left">#</th><th style="text-align:left">Équipe</th><th>V</th><th>Pts</th><th>+/-</th></tr></thead>
-          <tbody>${st.map((s, i) => `<tr style="${i < 2 ? 'background:var(--grn-bg)' : ''}">
-            <td>${i + 1}</td><td>${tName(s.id)}</td><td style="text-align:center">${s.w}</td>
-            <td style="text-align:center;font-weight:700">${s.pts}</td>
-            <td style="text-align:center">${s.diff > 0 ? '+' : ''}${s.diff}</td>
-          </tr>`).join('')}</tbody>
-        </table>
-      </div>`;
-    }).join('') + `</div>`;
-}
-function placeStakesBadgeHTML(stakes) {
-  if (stakes.isFinal) {
-    const txt = stakes.lo === stakes.hi ? `Place ${stakes.lo}` : `Places ${stakes.lo}-${stakes.hi}`;
-    return `<span style="font-weight:700;color:var(--brand)">🎯 ${txt}</span>`;
-  }
-  return `<span style="font-weight:600">🎯 Gagnant → places 1-${stakes.winnerHi} · Perdant → places ${stakes.loserLo}-${stakes.loserHi}</span>`;
-}
-function nodeMatchCardHTML(bracket, node, path, round, idx) {
-  const { a, b } = nodeMatchTeams(bracket, node, path, round, idx);
-  const isCons = path.length > 0;
-  const pathStr = path.join('-');
-  const roundLabel = bracketRoundName(node.depth, round);
-  const titlePrefix = isCons ? '🥈 ' : '';
-  const stakes = nodePlaceStakes(bracket, node, path, round);
-  const stakesLine = `<div style="font-size:11px;margin-top:4px">${placeStakesBadgeHTML(stakes)}</div>`;
-  if ((a == null) !== (b == null)) {
-    const winner = a ?? b;
-    return `<div style="background:var(--ylw-bg);border:1px dashed var(--ylw);border-radius:10px;padding:10px 14px;margin-bottom:8px">
-      <div style="font-size:11px;color:var(--muted)">${titlePrefix}${roundLabel} · Match ${idx + 1}</div>
-      <div style="font-weight:700;margin-top:4px">🟡 ${tName(winner)} qualifié(e) directement (exempt)</div>
-      ${stakesLine}
-    </div>`;
-  }
-  if (a == null && b == null) return '';
-  const r = nodeResultOf(bracket, path, round, idx);
-  const done = r.ga !== '' && r.gb !== '';
-  const ecartOk = done && Math.abs(+r.ga - +r.gb) >= ST.cfg.ecart;
-  const warn = done && !ecartOk ? `<span style="color:var(--ylw);font-size:11px"> ⚠ écart < ${ST.cfg.ecart} pts</span>` : '';
-  const setA = `setNodeResult('${bracket}','${pathStr}',${round},${idx},'ga',this.value)`;
-  const setB = `setNodeResult('${bracket}','${pathStr}',${round},${idx},'gb',this.value)`;
-  return `<div style="background:var(--s1);border:1px solid ${isCons ? 'var(--brand2)' : (done ? (ecartOk ? 'var(--grn)' : 'var(--ylw)') : 'var(--bdr)')};border-radius:10px;padding:10px 14px;margin-bottom:8px">
-    <div style="font-size:11px;color:${isCons ? 'var(--brand2)' : 'var(--muted)'};display:flex;justify-content:space-between">${titlePrefix}${roundLabel} · Match ${idx + 1}${warn}</div>
-    <div style="display:flex;align-items:center;gap:10px;margin-top:6px">
-      <div style="flex:1;font-weight:600">${tName(a)}</div>
-      ${scoreInputHTML(r.ga, r.gb, setA, setB, !isScorer())}
-      <div style="flex:1;font-weight:600;text-align:right">${tName(b)}</div>
-    </div>
-    ${stakesLine}
-  </div>`;
-}
-function renderBracketRoundTabs(bracket) {
-  const el = document.getElementById('bracketRoundTabs_' + bracket); if (!el) return;
-  const br = ST.brackets[bracket]; if (!br) { el.innerHTML = ''; return; }
-  if (br.depth === 0) { el.innerHTML = '<div class="info info-b">Une seule équipe dans ce tableau.</div>'; return; }
-  const rounds = collectGlobalRoundMatches(bracket);
-  const times = computeBracketRoundTimes();
-  let html = '';
-  for (let g = 0; g < br.depth; g++) {
-    const matches = rounds[g] || [];
-    const done = matches.length > 0 && matches.every(m => isMatchDone(bracket, m.node, m.path, m.round, m.idx));
-    const t = times[g] ? ` · ${times[g]}` : '';
-    html += `<button class="rtab ${ST.activeBracketRound[bracket] === g ? 'rtab-active' : ''}" onclick="setBracketRound('${bracket}',${g})">Tour ${g + 1}${t} ${done ? '✓' : ''}</button>`;
-  }
-  el.innerHTML = html;
-}
-window.setBracketRound = async function(bracket, rd) {
-  ST.activeBracketRound[bracket] = rd;
-  if (isAdmin()) await saveTournament({ activeBracketRound: ST.activeBracketRound });
-  renderBracketsView();
-};
-function renderBracketColumn(bracket, title) {
-  const br = ST.brackets[bracket];
-  const el = document.getElementById('bracketCol_' + bracket); if (!el) return;
-  if (!br || !br.teamCount) { el.innerHTML = `<div class="info info-b">Aucune équipe dans ce tableau.</div>`; return; }
-  renderBracketRoundTabs(bracket);
-  let body = '';
-  if (br.depth === 0) {
-    body = `<div class="info info-g">🏆 ${tName(br.autoWinner)} — championne automatique du tableau ${title}.</div>`;
-  } else {
-    const g = Math.min(Math.max(0, ST.activeBracketRound[bracket] || 0), br.depth - 1);
-    const rounds = collectGlobalRoundMatches(bracket);
-    // Ordre d'affichage : des matchs de classement les moins prestigieux vers
-    // les plus prestigieux, pour finir par la finale (1ère - 2ème place).
-    const matches = (rounds[g] || []).slice().sort((m1, m2) => computeAbsolutePlaceOffset(bracket, m2.path) - computeAbsolutePlaceOffset(bracket, m1.path) || (m1.idx - m2.idx));
-    const times = computeBracketRoundTimes();
-    const betweenPausesList = (Array.isArray(ST.cfg.pauses) ? ST.cfg.pauses : []).filter(p => p.mode === 'betweenPhases' && (+p.min || 0) > 0);
-    const lunchNote = (g === 0 && betweenPausesList.length) ? ` — ${betweenPausesList.map(p => `${p.label || 'pause'} de ${p.min} min`).join(', ')} incluse(s)` : '';
-    const timeBanner = times[g] ? `<div class="info info-b" style="margin-bottom:8px">🕒 Ce tour est prévu vers <strong>${times[g]}</strong>${lunchNote} (horaire estimatif, selon l'avancement réel)</div>` : '';
-    if (!matches.length) body = timeBanner + '<div class="info info-b">Aucun match à ce tour pour le moment (en attente des résultats du tour précédent).</div>';
-    else body = timeBanner + matches.map(m => nodeMatchCardHTML(bracket, m.node, m.path, m.round, m.idx)).join('');
-  }
-  const listEl = document.getElementById('bracketMatchList_' + bracket);
-  if (listEl) listEl.innerHTML = body || '<div class="info info-b">Rien à afficher.</div>';
-}
-function renderBracketsView() { renderBracketColumn('P', 'Principale'); renderBracketColumn('C', 'Consolante'); }
-window.setPage4View = function(v) {
-  ST.page4View = v;
-  renderTournamentPage();
-};
-function renderTournamentPage() {
-  const poolsEl = document.getElementById('poolsView'), bracketsEl = document.getElementById('bracketsView');
-  const tabsEl = document.getElementById('page4Tabs');
-  const hasBrackets = ST.phase === 'bracket' || ST.phase === 'done';
-  if (tabsEl) tabsEl.style.display = hasBrackets ? 'flex' : 'none';
-  const view = hasBrackets ? (ST.page4View || 'bracket') : 'pools';
-  const tabPools = document.getElementById('tabPoolsBtn'), tabBrackets = document.getElementById('tabBracketsBtn');
-  if (tabPools) tabPools.className = 'btn btn-sm ' + (view === 'pools' ? 'btn-b' : 'btn-ghost');
-  if (tabBrackets) tabBrackets.className = 'btn btn-sm ' + (view === 'bracket' ? 'btn-b' : 'btn-ghost');
-  if (view === 'pools') {
-    if (poolsEl) poolsEl.style.display = '';
-    if (bracketsEl) bracketsEl.style.display = 'none';
-    renderPoolsView();
-  } else {
-    if (poolsEl) poolsEl.style.display = 'none';
-    if (bracketsEl) bracketsEl.style.display = '';
-    renderBracketsView();
-  }
-  const btnFin = document.getElementById('btnGoFinal');
-  if (btnFin) btnFin.style.display = (ST.phase === 'bracket' && view === 'bracket') ? '' : 'none';
-}
-
-// ═══════════════════════════════════════════════════════════
-// PAGE ÉQUIPES — vue spectateur
-// ═══════════════════════════════════════════════════════════
-function renderTeamsSpecPage() {
-  const el = document.getElementById('teamsSpecListEl'); if (!el) return;
-  if (ST.groups.length) {
-    el.innerHTML = ST.groups.map(g => `<div style="background:var(--s1);border:1px solid var(--bdr);border-radius:10px;padding:12px;margin-bottom:10px">
-      <div style="font-family:'Oswald',sans-serif;font-weight:700;color:var(--brand);margin-bottom:6px">Groupe ${g.id.slice(1)}</div>
-      ${g.teamIds.map(id => { const t = tObj(id); return `<div style="padding:4px 0;border-top:1px solid var(--s3)"><strong>${t?.name}</strong><div style="font-size:11px;color:var(--muted)">${t?.club || ''}</div></div>`; }).join('')}
-    </div>`).join('');
-  } else {
-    el.innerHTML = ST.teams.map(t => `<div style="background:var(--s1);border:1px solid var(--bdr);border-radius:10px;padding:10px 14px;margin-bottom:6px">
-      <strong>${t.name}</strong><div style="font-size:11px;color:var(--muted)">${t.club || ''}</div>
-    </div>`).join('') || '<div class="info info-b">Aucune équipe enregistrée.</div>';
-  }
-}
-
-// ═══════════════════════════════════════════════════════════
-// INSCRIPTION PUBLIQUE (activée/désactivée par l'admin)
-// Les inscriptions publiques sont écrites dans une collection à
-// part ('petanque_registrations') pour ne jamais entrer en conflit
-// avec la liste officielle des équipes ; l'admin valide ou refuse
-// chaque demande avant qu'elle ne rejoigne réellement le tournoi.
-// ═══════════════════════════════════════════════════════════
-function registrationCap() { return ST.registrationMax != null ? ST.registrationMax : ST.cfg.n; }
-function renderRegisterPage() {
-  const el = document.getElementById('regPageBody'); if (!el) return;
-  if (!ST.registrationOpen) {
-    el.innerHTML = `<div class="info info-b">🔒 Les inscriptions ne sont pas ouvertes pour le moment. Revenez plus tard ou contactez l'organisateur.</div>`;
-    ST.regSubmitted = false;
-    return;
-  }
-  const cap = registrationCap();
-  const used = ST.registrationCount || 0;
-  const full = used >= cap;
-  if (full && !ST.regSubmitted) {
-    el.innerHTML = `<div class="info info-b">🚫 Les inscriptions en ligne sont complètes (${used}/${cap} équipes). Contactez l'organisateur si vous souhaitez être ajouté(e) en liste d'attente.</div>`;
-    return;
-  }
-  if (ST.regSubmitted) {
-    el.innerHTML = `<div class="info info-g">✅ Votre inscription a bien été prise en compte !<br>Elle est en cours de validation par l'organisateur : si elle est acceptée, votre équipe apparaîtra dans la liste des équipes engagées. Si elle ne peut pas être acceptée (places complètes, doublon…), vous en serez avisé(e) très rapidement au numéro ou à l'email indiqué.</div>
-      <button class="btn btn-ghost btn-sm" style="margin-top:10px" onclick="resetRegistrationForm()">📝 Inscrire une autre équipe</button>`;
-    return;
-  }
-  el.innerHTML = `<div class="info info-b" style="margin-bottom:10px">${used}/${cap} équipes inscrites en ligne</div>
-  <div class="card">
-    <label>Joueur 1 *</label><input type="text" id="regP1" style="margin-bottom:10px" placeholder="Prénom Nom">
-    <label>Joueur 2 *</label><input type="text" id="regP2" style="margin-bottom:10px" placeholder="Prénom Nom">
-    <label>Club</label><input type="text" id="regClub" style="margin-bottom:10px" placeholder="Nom du club">
-    <label>Téléphone</label><input type="tel" id="regTel" style="margin-bottom:10px" placeholder="06 12 34 56 78">
-    <label>Email</label><input type="email" id="regEmail" style="margin-bottom:14px" placeholder="email@exemple.com">
-    <button class="btn btn-b" style="width:100%" onclick="submitRegistration()">Envoyer l'inscription</button>
-    <div id="regMsg" style="margin-top:8px;font-size:13px"></div>
-  </div>`;
-}
-window.resetRegistrationForm = function() { ST.regSubmitted = false; renderRegisterPage(); };
-window.submitRegistration = async function() {
-  if ((ST.registrationCount || 0) >= registrationCap()) { renderRegisterPage(); return; }
-  const p1 = document.getElementById('regP1').value.trim();
-  const p2 = document.getElementById('regP2').value.trim();
-  const club = document.getElementById('regClub').value.trim();
-  const tel = document.getElementById('regTel').value.trim();
-  const email = document.getElementById('regEmail').value.trim();
-  const msgEl = document.getElementById('regMsg');
-  if (!p1 || !p2) { if (msgEl) { msgEl.textContent = 'Les deux noms de joueurs sont requis.'; msgEl.style.color = 'var(--red)'; } return; }
-  try {
-    const ref = doc(collection(db, 'petanque_registrations'));
-    await setDoc(ref, { p1, p2, club, tel, email, status: 'pending', createdAt: Date.now() });
-    // Compteur public "places en ligne utilisées" — décrémenté si l'admin refuse (voir rejectRegistration).
-    await setDoc(doc(db, 'petanque', 'status'), { registrationCount: increment(1) }, { merge: true });
-    ST.regSubmitted = true;
-    renderRegisterPage();
-  } catch (e) {
-    console.error('submitRegistration', e);
-    if (msgEl) { msgEl.textContent = "Erreur d'envoi : " + e.message; msgEl.style.color = 'var(--red)'; }
-  }
-};
-
-// ═══════════════════════════════════════════════════════════
-// ADMIN — Live / Comptes staff / Gestion rôles
-// ═══════════════════════════════════════════════════════════
-window.toggleLiveOpen = async function() {
-  if (!isAdmin()) return;
-  ST.liveOpen = !ST.liveOpen;
-  await saveTournament({ liveOpen: ST.liveOpen });
-  await setDoc(doc(db, 'petanque', 'status'), { liveOpen: ST.liveOpen }, { merge: true });
-  updateLiveToggleBtn();
-};
-function updateLiveToggleBtn() {
-  const btn = document.getElementById('liveToggleBtn'); if (!btn) return;
-  if (ST.liveOpen) { btn.textContent = '🟢 Live ouvert (spectateurs)'; btn.style.background = 'var(--grn)'; btn.style.borderColor = 'var(--grn)'; btn.style.color = '#fff'; }
-  else             { btn.textContent = '🔴 Live fermé (spectateurs)'; btn.style.background = 'var(--s1)'; btn.style.borderColor = 'var(--red)'; btn.style.color = 'var(--red)'; }
-}
-window.toggleRegistrationOpen = async function() {
-  if (!isAdmin()) return;
-  ST.registrationOpen = !ST.registrationOpen;
-  await saveTournament({ registrationOpen: ST.registrationOpen });
-  await setDoc(doc(db, 'petanque', 'status'), { registrationOpen: ST.registrationOpen }, { merge: true });
-  updateRegistrationToggleBtn();
-  updateRegistrationUI();
-};
-window.saveRegistrationMax = async function() {
-  if (!isAdmin()) return;
-  const el = document.getElementById('registrationMaxInput'); if (!el) return;
-  const v = el.value.trim();
-  ST.registrationMax = v === '' ? null : Math.max(0, +v);
-  await saveTournament({ registrationMax: ST.registrationMax });
-};
-function updateRegistrationToggleBtn() {
-  const btn = document.getElementById('registrationToggleBtn'); if (!btn) return;
-  if (ST.registrationOpen) { btn.textContent = '🟢 Inscriptions ouvertes (public)'; btn.style.background = 'var(--grn)'; btn.style.borderColor = 'var(--grn)'; btn.style.color = '#fff'; }
-  else                     { btn.textContent = '🔴 Inscriptions fermées (public)'; btn.style.background = 'var(--s1)'; btn.style.borderColor = 'var(--red)'; btn.style.color = 'var(--red)'; }
-  const maxEl = document.getElementById('registrationMaxInput');
-  if (maxEl && document.activeElement !== maxEl) maxEl.value = ST.registrationMax != null ? ST.registrationMax : '';
-}
-function subscribeToRegistrations() {
-  onSnapshot(collection(db, 'petanque_registrations'), snap => {
-    ST.registrations = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => r.status !== 'accepted' && r.status !== 'rejected');
-    renderRegistrationsPanel();
-  }, e => console.warn('subscribeToRegistrations', e));
-}
-function renderRegistrationsPanel() {
-  const el = document.getElementById('registrationsListEl'); if (!el) return;
-  const badge = document.getElementById('registrationsCount');
-  if (badge) badge.textContent = ST.registrations.length ? String(ST.registrations.length) : '';
-  if (!ST.registrations.length) { el.innerHTML = '<div class="info info-b">Aucune inscription en attente.</div>'; return; }
-  el.innerHTML = ST.registrations.map(r => `
-    <div style="display:flex;align-items:center;gap:10px;background:var(--s1);border:1px solid var(--bdr);border-radius:10px;padding:10px 14px;margin-bottom:6px;flex-wrap:wrap">
-      <div style="flex:1;min-width:180px">
-        <div style="font-weight:700">${r.p1} / ${r.p2}</div>
-        <div style="font-size:12px;color:var(--muted)">${r.club || 'Sans club'}${r.tel ? ' · 📞 ' + r.tel : ''}${r.email ? ' · ✉️ ' + r.email : ''}</div>
-      </div>
-      <button class="btn btn-b btn-xs" onclick="acceptRegistration('${r.id}')">✓ Valider</button>
-      <button class="btn btn-ghost btn-xs" onclick="rejectRegistration('${r.id}')" style="color:var(--red)">✕ Refuser</button>
-    </div>`).join('');
-}
-window.acceptRegistration = async function(id) {
-  if (!isAdmin()) return;
-  const r = ST.registrations.find(x => x.id === id); if (!r) return;
-  if (ST.teams.length >= ST.cfg.n) { alert("Le nombre d'équipes maximum (" + ST.cfg.n + ") est déjà atteint. Augmentez-le en page Config ou refusez d'autres inscriptions avant de valider celle-ci."); return; }
-  const name = r.p1 + ' / ' + r.p2;
-  ST.teams.push({ id: 't' + Date.now() + Math.floor(Math.random() * 1000), p1: r.p1, p2: r.p2, club: r.club || '', lv: 3, name });
-  await saveTournament({ teams: ST.teams });
-  await setDoc(doc(db, 'petanque_registrations', id), { status: 'accepted' }, { merge: true });
-  renderTeamsPage();
-};
-window.rejectRegistration = async function(id) {
-  if (!isAdmin()) return;
-  const r = ST.registrations.find(x => x.id === id);
-  const contact = r ? [r.tel, r.email].filter(Boolean).join(' / ') : '';
-  const warn = contact ? `\n\nPensez à prévenir l'équipe (${contact}) puisqu'elle a été informée qu'elle serait avisée rapidement en cas de refus.` : '';
-  if (!confirm('Refuser cette inscription ?' + warn)) return;
-  await setDoc(doc(db, 'petanque_registrations', id), { status: 'rejected' }, { merge: true });
-  // Le refus libère la place en ligne comptabilisée pour le plafond public.
-  await setDoc(doc(db, 'petanque', 'status'), { registrationCount: increment(-1) }, { merge: true });
-};
-window.toggleAdminPanel = function() {
-  const el = document.getElementById('adminPanel');
-  el.style.display = el.style.display === 'none' ? 'block' : 'none';
-  if (el.style.display === 'block') loadUserList();
-};
-window.adminCreateUser = async function() {
-  const email = document.getElementById('newUserEmail').value.trim();
-  const pass  = document.getElementById('newUserPass').value;
-  const role  = document.getElementById('newUserRole').value;
-  if (!email || !pass) { alert('Email et mot de passe requis.'); return; }
-  try {
-    const cred = await createUserWithEmailAndPassword(secondaryAuth, email, pass);
-    await setDoc(doc(db, 'users', cred.user.uid), { email, role });
-    await signOut(secondaryAuth);
-    document.getElementById('newUserEmail').value = '';
-    document.getElementById('newUserPass').value = '';
-    loadUserList();
-    alert('✅ Compte créé : ' + email + ' (' + role + ')');
-  } catch (e) { alert('Erreur : ' + e.message); }
-};
-window.loadUserList = async function() {
-  const el = document.getElementById('userListEl'); if (!el) return;
-  try {
-    const snap = await getDocs(collection(db, 'users'));
-    el.innerHTML = snap.docs.map(d => {
-      const u = d.data();
-      const roleColor = u.role === 'admin' ? 'var(--brand)' : u.role === 'scorer' ? 'var(--blu)' : 'var(--muted)';
-      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 10px;background:var(--s1);border:1px solid var(--bdr);border-radius:6px;margin-bottom:4px">
-        <div>
-          <span style="font-size:13px">${u.email}</span>
-          <span style="color:${roleColor};font-size:11px;font-weight:700;margin-left:8px">${u.role === 'admin' ? '👑' : u.role === 'scorer' ? '🎯' : '👁'} ${u.role}</span>
-        </div>
-        <div style="display:flex;gap:6px">
-          <select style="padding:4px 6px;font-size:11px;border-radius:6px;border:1px solid var(--bdr)" onchange="changeUserRole('${d.id}',this.value)">
-            <option value="scorer" ${u.role==='scorer'?'selected':''}>Scorer</option>
-            <option value="admin"  ${u.role==='admin'?'selected':''}>Admin</option>
-          </select>
-          <button class="btn btn-ghost btn-xs" onclick="deleteUserFromList('${d.id}')" style="color:var(--red)">🗑️</button>
-        </div>
-      </div>`;
-    }).join('') || '<div class="info info-b">Aucun compte staff créé.</div>';
-  } catch (e) { document.getElementById('userListEl').innerHTML = '<div class="info info-y">Lecture impossible.</div>'; }
-};
-window.changeUserRole = async function(uid, role) {
-  try { await updateDoc(doc(db, 'users', uid), { role }); loadUserList(); }
-  catch (e) { alert('Erreur : ' + e.message); }
-};
-window.deleteUserFromList = async function(uid) {
-  if (!confirm('Retirer ce compte des rôles (devient spectateur) ?')) return;
-  await deleteDoc(doc(db, 'users', uid)); loadUserList();
-};
-window.newTournament = async function() {
-  if (!isAdmin()) return;
-  if (!confirm('⚠️ Repartir de zéro ? Tout sera effacé.')) return;
-  ST.teams = []; ST.groups = []; ST.poolSchedule = []; ST.brackets = { P: null, C: null }; ST.results = {};
-  ST.phase = 'config'; ST.activePoolRound = 0; ST.activeBracketRound = { P: 0, C: 0 };
-  await saveTournament({ teams: [], groups: [], poolSchedule: [], brackets: { P: null, C: null }, phase: 'config', activePoolRound: 0, activeBracketRound: { P: 0, C: 0 }, liveOpen: false, registrationOpen: false, registrationMax: null });
-  await setDoc(doc(db, 'petanque', 'status'), { liveOpen: false, registrationOpen: false, registrationCount: 0 }, { merge: true });
-  try { const snap = await getDocs(collection(db, 'petanque_results')); await Promise.all(snap.docs.map(d => deleteDoc(doc(db, 'petanque_results', d.id)))); } catch (e) {}
-  try { const snap = await getDocs(collection(db, 'petanque_registrations')); await Promise.all(snap.docs.map(d => deleteDoc(doc(db, 'petanque_registrations', d.id)))); } catch (e) {}
-  goTo(1);
-};
-window.resetAllScores = async function() {
-  if (!isAdmin()) return;
-  if (!confirm('⚠️ Effacer tous les scores saisis ?')) return;
-  ST.results = {};
-  try { const snap = await getDocs(collection(db, 'petanque_results')); await Promise.all(snap.docs.map(d => deleteDoc(doc(db, 'petanque_results', d.id)))); } catch (e) {}
-  refreshCurrentPage();
-};
-window.reloadApp = function() { location.reload(); };
-window.goToLive = function() { goTo(4); closeMobileMenu(); };
-window.toggleMobileMenu = function() { document.getElementById('mobileDrawer').classList.toggle('open'); document.getElementById('menuOverlay').classList.toggle('open'); };
-window.closeMobileMenu = function() { document.getElementById('mobileDrawer').classList.remove('open'); document.getElementById('menuOverlay').classList.remove('open'); };
-function syncDrawerButtons() {
-  [['liveBtn','drawerLiveBtn'],['tvBtn','drawerTvBtn'],['adminBtn','drawerAdminBtn'],['backBtn','drawerBackBtn'],['fwdBtn','drawerFwdBtn'],['logoutBtn','drawerLogoutBtn']].forEach(([deskId, drawId]) => {
-    const d = document.getElementById(deskId), w = document.getElementById(drawId);
-    if (d && w) w.style.display = d.style.display;
-  });
-}
-window.addEventListener('resize', () => { if (window.innerWidth > 767) closeMobileMenu(); });
-window.printPlanning = function() {
-  let body = `<h2>${ST.cfg.name}</h2><p>Score : ${ST.cfg.scoreMax} pts · Écart minimum : ${ST.cfg.ecart} pts</p><h3>Planning Phase 1</h3>`;
-  const numRounds = Math.max(0, ...ST.poolSchedule.map(m => m.round)) + 1;
-  for (let r = 0; r < numRounds; r++) {
-    body += `<h4>Tour ${r + 1}</h4><table border="1" cellpadding="6" style="border-collapse:collapse;width:100%"><tr><th>Groupe</th><th>Terrain</th><th>Heure</th><th>Équipe A</th><th>Équipe B</th></tr>`;
-    ST.poolSchedule.filter(m => m.round === r).forEach(m => { body += `<tr><td>${m.group}</td><td>${m.court}</td><td>${m.time}</td><td>${tName(m.a)}</td><td>${tName(m.b)}</td></tr>`; });
-    body += '</table>';
-  }
-  const win = window.open('', '_blank');
-  win.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Planning</title><style>body{margin:16px;font-family:sans-serif;font-size:12px}</style></head><body>' + body + '<div style="margin-top:20px"><button onclick="window.print()">Imprimer</button></div></body></html>');
-  win.document.close();
-};
-
-// ═══════════════════════════════════════════════════════════
-// MODE ÉCRAN TV
-// ═══════════════════════════════════════════════════════════
-function getTVSettings() {
-  let saved = {}; try { saved = JSON.parse(localStorage.getItem('tvSettings_pet') || '{}'); } catch (e) {}
-  return { mode: saved.mode || 'cycle', intervalMatches: saved.intervalMatches || 12, intervalStandings: saved.intervalStandings || 20, hidden: saved.hidden || false, scroll: (saved.scroll === undefined) ? true : saved.scroll };
-}
-function saveTVSettings(patch) { const next = { ...getTVSettings(), ...patch }; try { localStorage.setItem('tvSettings_pet', JSON.stringify(next)); } catch (e) {} return next; }
-function startTVCycle() {
-  stopTVCycle(); tvScreenIndex = 0; tvLastRenderedKey = null;
-  tvClockIv = setInterval(updateTVClock, 1000); updateTVClock();
-}
-function stopTVCycle() { if (tvCycleIv) { clearTimeout(tvCycleIv); tvCycleIv = null; } if (tvClockIv) { clearInterval(tvClockIv); tvClockIv = null; } stopTVAutoScroll(); }
-function scheduleTVAdvance() {
-  if (tvCycleIv) { clearTimeout(tvCycleIv); tvCycleIv = null; }
-  const screens = getActiveTVScreens(); if (screens.length <= 1) return;
-  const current = screens[Math.min(tvScreenIndex, screens.length - 1)];
-  const cfg = getTVSettings();
-  const sec = (current && current.kind === 'standings') ? Math.max(5, +cfg.intervalStandings || 20) : Math.max(5, +cfg.intervalMatches || 12);
-  tvCycleIv = setTimeout(() => { const s2 = getActiveTVScreens(); if (s2.length > 1) tvScreenIndex = (tvScreenIndex + 1) % s2.length; renderTVContent(); }, sec * 1000);
-}
-function updateTVClock() { const el = document.getElementById('tvClock'); if (el) el.textContent = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
-let tvScrollState = { phase: 'pausedTop', since: 0 };
-function startTVAutoScroll() {
-  stopTVAutoScroll();
-  const el = document.getElementById('tvContent'); if (!el) return;
-  const maxInit = el.scrollHeight - el.clientHeight;
-  let startPos = 0;
-  if (maxInit > 6) { const live = el.querySelector('.tv-match-live'); if (live) { const er = el.getBoundingClientRect(), lr = live.getBoundingClientRect(); startPos = Math.max(0, Math.min((lr.top - er.top) + el.scrollTop - 16, maxInit)); } }
-  el.scrollTop = startPos;
-  tvScrollState = { phase: 'pausedTop', since: Date.now() };
-  if (getTVSettings().scroll === false) return;
-  const SPEED = 0.7, PAUSE = 2500;
-  tvScrollIv = setInterval(() => {
-    if (!el.isConnected) return;
-    const maxS = el.scrollHeight - el.clientHeight; if (maxS <= 6) return;
-    const now = Date.now();
-    if (tvScrollState.phase === 'pausedTop')   { if (now - tvScrollState.since >= PAUSE) tvScrollState = { phase: 'scrollingDown', since: now }; return; }
-    if (tvScrollState.phase === 'pausedBottom') { if (now - tvScrollState.since >= PAUSE) { el.scrollTop = 0; tvScrollState = { phase: 'pausedTop', since: now }; } return; }
-    el.scrollTop += SPEED;
-    if (el.scrollTop >= maxS - 1) { el.scrollTop = maxS; tvScrollState = { phase: 'pausedBottom', since: now }; }
-  }, 30);
-}
-function stopTVAutoScroll() { if (tvScrollIv) { clearInterval(tvScrollIv); tvScrollIv = null; } }
-function renderTVPage() { renderTVSettingsUI(); renderTVContent(); }
-function renderTVSettingsUI() {
-  const cfg = getTVSettings();
-  const bar = document.getElementById('tvControlBar'); if (bar) bar.style.display = cfg.hidden ? 'none' : 'flex';
-  const tab = document.getElementById('tvShowTab'); if (tab) tab.style.display = cfg.hidden ? 'flex' : 'none';
-  const modeSel = document.getElementById('tvModeSelect'); if (modeSel) modeSel.value = cfg.mode;
-  const ivmW = document.getElementById('tvIntervalMatchesWrap'); if (ivmW) ivmW.style.display = cfg.mode === 'standings' ? 'none' : '';
-  const ivsW = document.getElementById('tvIntervalStandingsWrap'); if (ivsW) ivsW.style.display = cfg.mode === 'results' ? 'none' : '';
-  const ivmI = document.getElementById('tvIntervalMatchesInput'); if (ivmI) ivmI.value = cfg.intervalMatches;
-  const ivsI = document.getElementById('tvIntervalStandingsInput'); if (ivsI) ivsI.value = cfg.intervalStandings;
-  const sc = document.getElementById('tvScrollToggle'); if (sc) sc.checked = cfg.scroll;
-}
-window.tvSetMode = v => { saveTVSettings({ mode: v }); startTVCycle(); renderTVPage(); };
-window.tvSetIntervalMatches = v => { saveTVSettings({ intervalMatches: Math.max(5, +v || 12) }); scheduleTVAdvance(); };
-window.tvSetIntervalStandings = v => { saveTVSettings({ intervalStandings: Math.max(5, +v || 20) }); scheduleTVAdvance(); };
-window.tvSetScroll = v => { saveTVSettings({ scroll: !!v }); startTVAutoScroll(); };
-window.tvToggleHidden = () => { saveTVSettings({ hidden: !getTVSettings().hidden }); renderTVSettingsUI(); };
-window.tvToggleFullscreen = () => { if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {}); else document.exitFullscreen().catch(() => {}); };
-window.tvExit = () => { stopTVCycle(); if (USER_ROLE === 'spectator' || USER_ROLE === null) spectatorGoLive(4); else goTo(4); };
-function tvMatchRowHTML(m) {
-  const aName = m.aId ? tName(m.aId) : '<em>Exempt</em>', bName = m.bId ? tName(m.bId) : '<em>Exempt</em>';
-  const score = m.done ? `${m.r.ga} – ${m.r.gb}` : '–';
-  return `<div class="tv-match-row ${m.isLive ? 'tv-match-live' : ''}">
-    <div class="tv-match-meta"><span>${m.label}</span><span class="tv-match-time">${m.time || ''}</span></div>
-    <div class="tv-match-teams"><span class="tv-team">${aName}</span><span class="tv-score">${score}</span><span class="tv-team tv-team-r">${bName}</span></div>
-  </div>`;
-}
-function tvMatchGridHTML(matches) {
-  if (!matches.length) return '<div class="tv-empty">Aucun match à afficher.</div>';
-  return `<div class="tv-match-grid">${matches.map(m => tvMatchRowHTML(m)).join('')}</div>`;
-}
-function tvStandingsPoolsHTML() {
-  return `<div class="tv-pools-grid">` + ST.groups.map(g => {
-    const st = computeGroupStandings(g.id);
-    return `<div class="tv-pool-card" style="border-color:var(--brand)">
-      <div class="tv-pool-ttl" style="background:var(--brand)">Groupe ${g.id.slice(1)}</div>
-      <table class="tv-stbl"><thead><tr><th>#</th><th>Équipe</th><th>V</th><th>Pts</th><th>+/-</th></tr></thead>
-      <tbody>${st.map((s, i) => `<tr class="${i < 2 ? 'tv-row-top' : ''}"><td>${i + 1}</td><td class="tv-team-name">${tName(s.id)}</td><td>${s.w}</td><td class="tv-pts">${s.pts}</td><td>${s.diff > 0 ? '+' : ''}${s.diff}</td></tr>`).join('')}</tbody>
-      </table></div>`;
-  }).join('') + `</div>`;
-}
-function tvFinalRankingHTML() {
-  const ranking = computeFinalRanking();
-  if (!ranking.length) return '<div class="tv-empty">Le classement s\'affichera une fois la phase 2 lancée.</div>';
-  return `<table class="tv-final-tbl"><thead><tr><th>Place</th><th>Équipe</th><th>Club</th></tr></thead>
-    <tbody>${ranking.map(r => `<tr class="${r.place <= 3 ? 'tv-podium-' + r.place : ''}">
-      <td class="tv-place">${r.place === 1 ? '🥇' : r.place === 2 ? '🥈' : r.place === 3 ? '🥉' : r.place}</td>
-      <td class="tv-team-name">${tName(r.teamId)}</td>
-      <td style="font-size:.7em;color:rgba(255,255,255,.6)">${tClub(r.teamId)}</td>
-    </tr>`).join('')}</tbody>
-  </table>`;
-}
-const TV_PAGE_SIZE = 12;
-function getTVScreens() {
-  const screens = [];
-  if (ST.phase === 'pools' || ST.phase === 'config') {
-    const flat = ST.poolSchedule.map(m => { const r = getPoolResult(m.matchId); return { label: 'Groupe ' + m.group.slice(1) + ' · T' + m.court, time: m.time, aId: m.a, bId: m.b, r, done: (r.ga !== '' && r.gb !== ''), isLive: ST.poolSchedule.find(pm => pm.a === m.a && pm.b === m.b)?.round === ST.activePoolRound }; });
-    screens.push({ key: 'pool-results', kind: 'matches', title: '🎯 Matchs de Poules', render: () => tvMatchGridHTML(flat) });
-    screens.push({ key: 'pool-std', kind: 'standings', title: '📊 Classement des Poules', render: tvStandingsPoolsHTML });
-    return screens;
-  }
-  ['P', 'C'].forEach(bk => {
-    const br = ST.brackets[bk]; if (!br || !br.teamCount) return;
-    const label = bk === 'P' ? 'Principale' : 'Consolante';
-    if (br.depth === 0) { screens.push({ key: 'auto-' + bk, kind: 'matches', title: `🏆 ${label}`, render: () => `<div class="tv-empty">${tName(br.autoWinner)} championne automatique.</div>` }); return; }
-    const rounds = collectGlobalRoundMatches(bk);
-    let firstUnfinished = -1;
-    for (let g = 0; g < br.depth; g++) {
-      const ms = rounds[g] || [];
-      if (!ms.length) continue;
-      if (!ms.every(m => isMatchDone(bk, m.node, m.path, m.round, m.idx))) { firstUnfinished = g; break; }
-    }
-    const roundsToShow = firstUnfinished === -1 ? [br.depth - 1] : [firstUnfinished];
-    roundsToShow.forEach(g => {
-      const ms = (rounds[g] || []).slice().sort((m1, m2) => computeAbsolutePlaceOffset(bk, m2.path) - computeAbsolutePlaceOffset(bk, m1.path) || (m1.idx - m2.idx));
-      const flat = [];
-      ms.forEach(m => {
-        const { a, b } = nodeMatchTeams(bk, m.node, m.path, m.round, m.idx);
-        if (a == null && b == null) return;
-        const r = nodeResultOf(bk, m.path, m.round, m.idx);
-        const tag = m.path.length > 0 ? '🥈 Classement · ' : '';
-        const st = nodePlaceStakes(bk, m.node, m.path, m.round);
-        const placeTxt = st.isFinal ? (st.lo === st.hi ? `Place ${st.lo}` : `Places ${st.lo}-${st.hi}`) : `Perdant → ${st.loserLo}-${st.loserHi}`;
-        flat.push({ label: label + ' · ' + tag + bracketRoundName(m.node.depth, m.round) + ' · M' + (m.idx + 1) + ' · ' + placeTxt, time: '', aId: a, bId: b, r, done: (r.ga !== '' && r.gb !== '') || r.bye, isLive: g === ST.activeBracketRound[bk] });
-      });
-      const pageCount = Math.max(1, Math.ceil(flat.length / TV_PAGE_SIZE));
-      for (let i = 0; i < pageCount; i++) {
-        const page = flat.slice(i * TV_PAGE_SIZE, (i + 1) * TV_PAGE_SIZE);
-        screens.push({ key: 'br-' + bk + '-g' + g + '-' + i, kind: 'matches', title: pageCount > 1 ? `🏆 ${label} · Tour ${g + 1} (${i + 1}/${pageCount})` : `🏆 ${label} · Tour ${g + 1}`, render: () => tvMatchGridHTML(page) });
-      }
-    });
-  });
-  screens.push({ key: 'final-rank', kind: 'standings', title: '🥇 Classement Final', render: tvFinalRankingHTML });
-  return screens;
-}
-function getActiveTVScreens() {
-  const screens = getTVScreens(); const cfg = getTVSettings();
-  if (cfg.mode === 'results')   return screens.filter(s => s.kind === 'matches');
-  if (cfg.mode === 'standings') return screens.filter(s => s.kind === 'standings');
-  return screens;
-}
-function renderTVContent() {
-  const el = document.getElementById('tvContent'); if (!el) return;
-  const phaseEl = document.getElementById('tvPhaseBadge');
-  if (phaseEl) phaseEl.textContent = ST.phase === 'pools' ? '🎯 Phase 1 (Poules)' : ST.phase === 'bracket' ? '🏆 Phase 2 (Tableaux)' : ST.phase === 'config' ? '⚙️ Préparation' : '🏁 Terminé';
-  if (ST.phase !== tvLastPhase) { tvLastPhase = ST.phase; tvScreenIndex = 0; }
-  const screens = getActiveTVScreens();
-  const sig = screens.map(s => s.key).join('|');
-  if (sig !== tvLastScreensSig) { tvLastScreensSig = sig; tvScreenIndex = 0; }
-  if (tvScreenIndex >= screens.length) tvScreenIndex = 0;
-  const screen = screens[tvScreenIndex];
-  const subEl = document.getElementById('tvSubTitle');
-  const isScreenChange = !screen || screen.key !== tvLastRenderedKey;
-  tvLastRenderedKey = screen ? screen.key : null;
-  if (!screen) { if (subEl) subEl.textContent = ''; el.innerHTML = '<div class="tv-empty">Rien à afficher.</div>'; }
-  else { if (subEl) subEl.textContent = screen.title; el.innerHTML = screen.render(); }
-  if (!isScreenChange) return;
-  requestAnimationFrame(startTVAutoScroll);
-  scheduleTVAdvance();
-}
-</script>
 <style>
 :root {
   --ink:#2b2013; --ink2:#4a3a22; --dim:#9c8a6c; --muted:#7a6a50;
@@ -2007,7 +179,7 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
         <button onclick="enterLiveModeAndGo('T')"  style="padding:13px 6px;background:rgba(255,255,255,.14);border:1.5px solid rgba(255,255,255,.3);border-radius:10px;color:#fff;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:5px">👥 ÉQUIPES</button>
-        <button onclick="enterLiveModeAndGo('R')"  style="padding:13px 6px;background:rgba(255,255,255,.14);border:1.5px solid rgba(255,255,255,.3);border-radius:10px;color:#fff;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:5px">📋 RÈGLEMENT</button>
+        <button onclick="toggleRulesPublic()"  style="padding:13px 6px;background:rgba(255,255,255,.14);border:1.5px solid rgba(255,255,255,.3);border-radius:10px;color:#fff;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:5px">📋 RÈGLEMENT</button>
         <button onclick="enterLiveModeAndGo('TV')" style="padding:13px 6px;background:rgba(255,255,255,.14);border:1.5px solid rgba(255,255,255,.3);border-radius:10px;color:#fff;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:5px">📺 ÉCRAN</button>
       </div>
       <div id="loginRegisterBox" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.25);text-align:center">
@@ -2071,7 +243,6 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
 <!-- ══ PANNEAU ADMIN ══ -->
 <div id="adminPanel">
   <div class="wrap" style="padding:0 16px">
-    <!-- Ligne 1 : actions rapides -->
     <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:12px 0 10px">
       <button id="liveToggleBtn" class="btn btn-sm" onclick="toggleLiveOpen()">🔴 Live fermé</button>
       <button id="registrationToggleBtn" class="btn btn-sm" onclick="toggleRegistrationOpen()">🔴 Inscriptions fermées (public)</button>
@@ -2083,12 +254,10 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
       <button class="btn btn-ghost btn-sm" onclick="resetAllScores()" style="color:var(--red)">♻️ Réinitialiser scores</button>
       <button class="btn btn-ghost btn-sm" onclick="newTournament()" style="color:var(--red)">🆕 Nouveau tournoi</button>
     </div>
-    <!-- Ligne 1bis : inscriptions publiques en attente -->
     <div class="card" style="margin-bottom:10px">
       <div class="card-ttl">📝 Inscriptions publiques en attente <span id="registrationsCount" style="color:var(--brand)"></span></div>
       <div id="registrationsListEl"></div>
     </div>
-    <!-- Ligne 2 : gestion staff -->
     <div class="card" style="margin-bottom:10px">
       <div class="card-ttl">👥 Gestion du staff</div>
       <div style="display:grid;grid-template-columns:1fr 1fr auto auto;gap:8px;margin-bottom:10px;align-items:end">
@@ -2337,6 +506,1845 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
     </div>
   </div>
 </div>
+
+<script type="module">
+import { initializeApp } from "firebase/app";
+import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged,
+         createUserWithEmailAndPassword, GoogleAuthProvider, signInWithRedirect,
+         getRedirectResult, setPersistence, browserSessionPersistence } from "firebase/auth";
+import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot,
+         collection, getDocs, deleteDoc, increment } from "firebase/firestore";
+
+// ═══════════════════════════════════════════════════════════
+// FIREBASE — Projet tournoi-petanque-rsth
+// ═══════════════════════════════════════════════════════════
+const firebaseConfig = {
+  apiKey: "AIzaSyCQhLIo-WXurUBS0QEiOjjd9tby9IKHtGs",
+  authDomain: "tournoi-rsth-de-petanque.firebaseapp.com",
+  projectId: "tournoi-rsth-de-petanque",
+  storageBucket: "tournoi-rsth-de-petanque.firebasestorage.app",
+  messagingSenderId: "206862784229",
+  appId: "1:206862784229:web:bb3ec38b78fdfc6f67a60c"
+};
+
+const app = initializeApp(firebaseConfig);
+const auth = getAuth(app);
+const db = getFirestore(app);
+
+try { await setPersistence(auth, browserSessionPersistence); } catch (e) { console.warn('setPersistence', e); }
+const secondaryApp = initializeApp(firebaseConfig, 'secondary');
+const secondaryAuth = getAuth(secondaryApp);
+
+// ═══════════════════════════════════════════════════════════
+// ÉTAT GLOBAL
+// ═══════════════════════════════════════════════════════════
+let CURRENT_USER = null;
+let USER_ROLE = null;
+let unsubTournament = null;
+let unsubResults = null;
+let unsubLiveWatch = null;
+let liveWatchIv = null;
+let pendingSpecTarget = null;
+let tvCycleIv = null, tvClockIv = null, tvScrollIv = null;
+let tvScreenIndex = 0, tvLastPhase = null, tvLastScreensSig = null, tvLastRenderedKey = null;
+
+const ST = {
+  page: 1, prevPage: 1, rulesOpen: false,
+  teams: [],
+  groups: [],
+  poolSchedule: [],
+  brackets: { P: null, C: null },
+  results: {},
+  phase: 'config',
+  activePoolRound: 0,
+  activeBracketRound: { P: 0, C: 0 },
+  page4View: null,
+  liveOpen: false,
+  registrationOpen: false,
+  registrations: [],
+  regSubmitted: false,
+  registrationMax: null,
+  registrationCount: 0,
+  cfg: {
+    name: 'Trophée Pétanque Doublette — RSTH',
+    club: 'RSTH',
+    n: 16,
+    courts: 8,
+    mt: 45,
+    tt: 10,
+    start: '09:00',
+    scoreMax: 13,
+    ecart: 2,
+    balance: 'level',
+    pauses: []
+  }
+};
+
+function isAdmin()  { return USER_ROLE === 'admin'; }
+function isScorer() { return USER_ROLE === 'admin' || USER_ROLE === 'scorer'; }
+function isLiveBlocked() { return USER_ROLE === 'spectator' && !ST.liveOpen; }
+function shuffle(arr) { const a = arr.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+function addMinutes(timeStr, mins) {
+  const [h, m] = (timeStr || '09:00').split(':').map(Number);
+  const total = h * 60 + m + mins;
+  const hh = Math.floor((total / 60 + 24 * 10) % 24), mm = ((total % 60) + 60) % 60;
+  return String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0');
+}
+function tObj(id)  { return ST.teams.find(t => t.id === id); }
+function tName(id) { const t = tObj(id); return t ? t.name : '?'; }
+function tClub(id) { const t = tObj(id); return t ? t.club : ''; }
+
+// ─── Fonctions globales pour les appels inline ───
+window.toggleRulesPublic = function() {
+  const el = document.getElementById('rulesModal');
+  if (el) el.style.display = el.style.display === 'flex' ? 'none' : 'flex';
+};
+
+// ─── Auth ──────────────────────────────────────────────────
+onAuthStateChanged(auth, async (user) => {
+  if (user) {
+    CURRENT_USER = user;
+    let role = 'spectator';
+    try {
+      const snap = await getDoc(doc(db, 'users', user.uid));
+      if (snap.exists()) role = snap.data().role || 'spectator';
+    } catch (e) { console.warn('lecture rôle échouée', e); }
+    USER_ROLE = role;
+    showApp();
+    applyRoleUI();
+    subscribeToTournament();
+    subscribeToResults();
+    if (isAdmin()) subscribeToRegistrations();
+  } else {
+    CURRENT_USER = null; USER_ROLE = null;
+    showLogin();
+  }
+});
+
+window.loginGoogle = async function() {
+  const provider = new GoogleAuthProvider();
+  try {
+    showAuthMsg('Redirection vers Google...', 'var(--ink2)');
+    await signInWithRedirect(auth, provider);
+  } catch (e) {
+    showAuthMsg(authErrMsg(e.code), 'var(--red)');
+  }
+};
+
+getRedirectResult(auth).catch((e) => {
+  if (e && e.code) showAuthMsg(authErrMsg(e.code), 'var(--red)');
+});
+
+window.loginEmail = async function() {
+  const email = document.getElementById('loginEmailInput').value.trim();
+  const pass  = document.getElementById('loginPassInput').value;
+  if (!email || !pass) { showAuthMsg('Email et mot de passe requis.', 'var(--red)'); return; }
+  try { await signInWithEmailAndPassword(auth, email, pass); }
+  catch (e) { showAuthMsg(authErrMsg(e.code), 'var(--red)'); }
+};
+
+window.logout = async function() {
+  unsubAll();
+  await signOut(auth);
+  USER_ROLE = null; CURRENT_USER = null;
+  showLogin();
+};
+
+window.exitLiveClosedToHome = function() {
+  pendingSpecTarget = null;
+  const overlay = document.getElementById('liveClosedOverlay');
+  if (overlay) overlay.style.display = 'none';
+  unsubAll();
+  USER_ROLE = null; CURRENT_USER = null; ST.page = 1; ST.regSubmitted = false;
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  const p1 = document.getElementById('page1');
+  if (p1) p1.classList.add('active');
+  showLogin();
+};
+
+function unsubAll() {
+  if (unsubResults)    { unsubResults();    unsubResults = null; }
+  if (unsubLiveWatch)  { unsubLiveWatch();  unsubLiveWatch = null; }
+  if (liveWatchIv)     { clearInterval(liveWatchIv); liveWatchIv = null; }
+}
+
+function authErrMsg(code) {
+  const map = {
+    'auth/invalid-email': 'Adresse email invalide.',
+    'auth/user-not-found': 'Aucun compte avec cet email.',
+    'auth/wrong-password': 'Mot de passe incorrect.',
+    'auth/invalid-credential': 'Identifiants incorrects.',
+    'auth/too-many-requests': 'Trop de tentatives, réessayez plus tard.',
+    'auth/unauthorized-domain': 'Ce site n\'est pas autorisé pour la connexion Google (domaine non déclaré dans Firebase).'
+  };
+  return map[code] || 'Erreur de connexion (' + code + ')';
+}
+
+function showAuthMsg(msg, color) {
+  const el = document.getElementById('authMsg');
+  if (el) { el.textContent = msg; el.style.color = color; }
+}
+
+function showLogin() {
+  document.getElementById('loginScreen').style.display = 'flex';
+  document.getElementById('appScreen').style.display = 'none';
+}
+
+function showApp() {
+  document.getElementById('loginScreen').style.display = 'none';
+  document.getElementById('appScreen').style.display = 'block';
+}
+
+function applyRoleUI() {
+  document.querySelectorAll('[data-role]').forEach(el => {
+    const need = el.dataset.role;
+    let show = false;
+    if (need === 'admin')  show = isAdmin();
+    if (need === 'scorer') show = isScorer();
+    el.style.display = show ? '' : 'none';
+  });
+  const badge = document.getElementById('roleBadge');
+  if (badge) badge.textContent = USER_ROLE === 'admin' ? '👑 Admin' : USER_ROLE === 'scorer' ? '🎯 Scorer' : '👁 Spectateur';
+  const specNav = document.getElementById('specNav');
+  if (specNav) specNav.style.display = USER_ROLE === 'spectator' ? 'flex' : 'none';
+  const stepNav = document.getElementById('stepNav');
+  if (stepNav) stepNav.style.display = isAdmin() ? '' : 'none';
+  if (USER_ROLE === 'spectator') goTo(ST.teams.length > 0 && ST.phase !== 'config' ? 4 : 'T');
+  else if (USER_ROLE === 'scorer') goTo(4);
+  else goTo(ST.phase === 'config' && ST.teams.length === 0 ? 1 : (ST.page === 1 ? 4 : ST.page));
+}
+
+// ─── Live spectateur ──────────────────────────────────────
+window.enterLiveModeAndGo = async function(target) {
+  if (target === 'R') { toggleRules(); return; }
+
+  if (target !== 'REG') {
+    let liveIsOpen = false;
+    try {
+      const snap = await getDoc(doc(db, 'petanque', 'status'));
+      liveIsOpen = snap.exists() && snap.data().liveOpen === true;
+    } catch (e) {}
+    if (!liveIsOpen) {
+      const msgEl = document.getElementById('specPublicMsg');
+      if (msgEl) msgEl.textContent = "🔴 Live actuellement fermé — l'organisateur n'a pas encore ouvert l'accès en direct.";
+      return;
+    }
+  }
+  const msgEl0 = document.getElementById('specPublicMsg');
+  if (msgEl0) msgEl0.textContent = '';
+
+  USER_ROLE = 'spectator'; CURRENT_USER = null;
+  if (auth.currentUser) { try { await signOut(auth); } catch (e) {} }
+  showApp(); applyRoleUI();
+  subscribeToTournamentPublic();
+  subscribeToResultsPublic();
+  startLiveWatch();
+  pendingSpecTarget = null;
+  const overlayEl = document.getElementById('liveClosedOverlay');
+  if (overlayEl) overlayEl.style.display = 'none';
+  if (target === 'TV') goTo('TV');
+  else if (target === 'T') goTo('T');
+  else if (target === 'REG') goTo('REG');
+  else if (target === 4) goTo(4);
+};
+
+const LIVE_FREE_PAGES = ['R', 'REG'];
+
+function handleLiveOpenChange(nowOpen) {
+  ST.liveOpen = nowOpen;
+  const overlay = document.getElementById('liveClosedOverlay');
+  if (nowOpen) {
+    if (overlay) overlay.style.display = 'none';
+    if (pendingSpecTarget) { const t = pendingSpecTarget; pendingSpecTarget = null; goTo(t); }
+  } else if (USER_ROLE === 'spectator' && overlay && !ST.rulesOpen && !LIVE_FREE_PAGES.includes(ST.page)) {
+    document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    overlay.style.display = 'flex';
+  }
+}
+
+function startLiveWatch() {
+  stopLiveWatch();
+  unsubLiveWatch = onSnapshot(doc(db, 'petanque', 'status'), { includeMetadataChanges: true }, snap => {
+    if (snap.metadata.fromCache) return;
+    if (snap.exists()) handleLiveOpenChange(snap.data().liveOpen === true);
+  }, () => {});
+  liveWatchIv = setInterval(async () => {
+    try { const snap = await getDoc(doc(db, 'petanque', 'status')); if (snap.exists()) handleLiveOpenChange(snap.data().liveOpen === true); } catch (e) {}
+  }, 20000);
+}
+
+function stopLiveWatch() {
+  if (unsubLiveWatch) { unsubLiveWatch(); unsubLiveWatch = null; }
+  if (liveWatchIv)    { clearInterval(liveWatchIv); liveWatchIv = null; }
+}
+
+function updateRegistrationUI() {
+  const box = document.getElementById('loginRegisterBox');
+  if (box) box.style.display = ST.registrationOpen ? 'block' : 'none';
+  const navBtn = document.getElementById('specNavRegBtn');
+  if (navBtn) navBtn.style.display = (USER_ROLE === 'spectator' && ST.registrationOpen) ? '' : 'none';
+  if (ST.page === 'REG') renderRegisterPage();
+}
+
+onSnapshot(doc(db, 'petanque', 'status'), snap => {
+  if (snap.exists()) {
+    const d = snap.data();
+    ST.registrationOpen = d.registrationOpen === true;
+    ST.registrationCount = d.registrationCount || 0;
+    updateRegistrationUI();
+  }
+}, () => {});
+
+// ─── Firestore — abonnements ──────────────────────────────
+function subscribeToTournamentPublic() {
+  unsubTournament = onSnapshot(doc(db, 'petanque', 'current'), snap => {
+    if (!snap.exists()) return;
+    applyTournamentData(snap.data());
+    if (ST.teams.length > 0 && ST.phase !== 'config' && ST.page < 4 && USER_ROLE === 'spectator') goTo(4);
+  }, e => console.warn('subscribeToTournamentPublic', e));
+}
+
+function subscribeToResultsPublic() {
+  unsubResults = onSnapshot(collection(db, 'petanque_results'), snap => {
+    snap.docChanges().forEach(ch => {
+      if (ch.type === 'removed') delete ST.results[ch.doc.id];
+      else ST.results[ch.doc.id] = normalizeResult(ch.doc.data());
+    });
+    refreshCurrentPage();
+  }, () => {});
+}
+
+function subscribeToTournament() {
+  unsubTournament = onSnapshot(doc(db, 'petanque', 'current'), snap => {
+    if (!snap.exists()) return;
+    applyTournamentData(snap.data());
+    updateLiveToggleBtn();
+    updateRegistrationToggleBtn();
+    if (isAdmin() && ST.page === 1) syncCfgForm();
+    refreshCurrentPage();
+  }, e => console.warn('subscribeToTournament', e));
+}
+
+function subscribeToResults() {
+  unsubResults = onSnapshot(collection(db, 'petanque_results'), snap => {
+    snap.docChanges().forEach(ch => {
+      if (ch.type === 'removed') delete ST.results[ch.doc.id];
+      else ST.results[ch.doc.id] = normalizeResult(ch.doc.data());
+    });
+    refreshCurrentPage();
+  }, () => {});
+}
+
+function applyTournamentData(data) {
+  Object.assign(ST.cfg, data.cfg || {});
+  if (!Array.isArray(ST.cfg.pauses)) ST.cfg.pauses = [];
+  if (!ST.cfg.pauses.length && data.cfg && data.cfg.pauseEnabled) {
+    ST.cfg.pauses = [{ id: 'pz-migre', label: 'Pause déjeuner', mode: data.cfg.pauseMode || 'afterRound', afterRound: data.cfg.pauseAfter || 1, min: data.cfg.pauseMin || 60 }];
+  }
+  ST.teams = data.teams || [];
+  ST.groups = data.groups || [];
+  ST.poolSchedule = data.poolSchedule || [];
+  ST.brackets = data.brackets || { P: null, C: null };
+  ST.phase = data.phase || 'config';
+  ST.activePoolRound = data.activePoolRound || 0;
+  ST.activeBracketRound = data.activeBracketRound || { P: 0, C: 0 };
+  ST.registrationOpen = data.registrationOpen === true;
+  ST.registrationMax = (data.registrationMax != null && data.registrationMax !== '') ? +data.registrationMax : null;
+  updateRegistrationUI();
+  refreshCurrentPage();
+}
+
+function normalizeResult(data) { return { ga: data.ga != null ? data.ga : '', gb: data.gb != null ? data.gb : '', bye: !!data.bye }; }
+
+async function saveTournament(patch) {
+  try { await setDoc(doc(db, 'petanque', 'current'), patch, { merge: true }); }
+  catch (e) { console.error('saveTournament', e); alert('Erreur de sauvegarde : ' + e.message); }
+}
+
+async function saveResult(matchId, ga, gb, bye) {
+  try { await setDoc(doc(db, 'petanque_results', matchId), { ga, gb, bye: !!bye }, { merge: true }); }
+  catch (e) { console.error('saveResult', e); }
+}
+
+// ─── Navigation ───────────────────────────────────────────
+function refreshCurrentPage() {
+  if (ST.page === 1) syncCfgForm();
+  if (ST.page === 2) renderTeamsPage();
+  if (ST.page === 3) renderPlanningPreview();
+  if (ST.page === 4) renderTournamentPage();
+  if (ST.page === 5) renderFinalPage();
+  if (ST.page === 'T') renderTeamsSpecPage();
+  if (ST.page === 'REG') renderRegisterPage();
+  if (ST.page === 'TV') renderTVContent();
+  updateLiveToggleBtn();
+  updateRegistrationToggleBtn();
+}
+
+window.goTo = function(n) {
+  if (USER_ROLE === 'scorer' && n !== 4) n = 4;
+  if (!LIVE_FREE_PAGES.includes(n) && isLiveBlocked()) {
+    pendingSpecTarget = n;
+    if (!LIVE_FREE_PAGES.includes(ST.page)) {
+      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+    }
+    const overlay = document.getElementById('liveClosedOverlay');
+    if (overlay) overlay.style.display = 'flex';
+    return;
+  }
+  ST.prevPage = ST.page; ST.page = n;
+  stopTVCycle();
+  document.body.classList.toggle('tv-mode', n === 'TV');
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  updateSpecNavForPage(n);
+  if (n === 'T') {
+    document.getElementById('pageT').classList.add('active');
+    renderTeamsSpecPage();
+    document.querySelectorAll('.spec-nav-btn').forEach(b => b.classList.toggle('spec-nav-active', b.dataset.target === 'T'));
+    return;
+  }
+  if (n === 'REG') {
+    document.getElementById('pageREG').classList.add('active');
+    renderRegisterPage();
+    document.querySelectorAll('.spec-nav-btn').forEach(b => b.classList.toggle('spec-nav-active', b.dataset.target === 'REG'));
+    return;
+  }
+  if (n === 'TV') {
+    document.getElementById('pageTV').classList.add('active');
+    renderTVPage(); startTVCycle();
+    document.querySelectorAll('.spec-nav-btn').forEach(b => b.classList.toggle('spec-nav-active', b.dataset.target === 'TV'));
+    return;
+  }
+  document.getElementById('page' + n).classList.add('active');
+  document.getElementById('backBtn').style.display = (isAdmin() && n > 1) ? '' : 'none';
+  updateFwdBtn();
+  updateSteps(n);
+  document.querySelectorAll('.spec-nav-btn').forEach(b => b.classList.toggle('spec-nav-active', b.dataset.target == ('' + n)));
+  window.scrollTo(0, 0);
+  syncDrawerButtons();
+  if (n === 1) syncCfgForm();
+  if (n === 2) renderTeamsPage();
+  if (n === 3) renderPlanningPreview();
+  if (n === 4) renderTournamentPage();
+  if (n === 5) renderFinalPage();
+};
+
+function updateSpecNavForPage(n) {
+  const restricted = n === 'REG';
+  ['4', '5', 'T', 'TV'].forEach(t => {
+    const btn = document.querySelector(`.spec-nav-btn[data-target="${t}"]`);
+    if (btn) btn.style.display = restricted ? 'none' : '';
+  });
+}
+
+window.goBack = function() { if (ST.page > 1 && typeof ST.page === 'number') goTo(ST.page - 1); };
+
+function canGoFwd() {
+  if (ST.page === 1) return true;
+  if (ST.page === 2) return ST.teams.length === ST.cfg.n;
+  if (ST.page === 3) return ST.poolSchedule.length > 0;
+  return false;
+}
+
+function updateFwdBtn() {
+  const el = document.getElementById('fwdBtn'); if (!el) return;
+  el.style.display = (isAdmin() && ST.page >= 1 && ST.page <= 2) ? '' : 'none';
+  el.disabled = !canGoFwd();
+}
+
+window.goFwd = function() { if (ST.page === 1) goTo(2); else if (ST.page === 2 && ST.teams.length === ST.cfg.n) goTo(3); };
+
+function updateSteps(n) {
+  document.querySelectorAll('.step').forEach(s => {
+    const sn = +s.dataset.s; s.classList.remove('active', 'done');
+    if (sn === n) s.classList.add('active'); else if (sn < n) s.classList.add('done');
+    const num = s.querySelector('.step-n'); if (num) num.textContent = sn < n ? '✓' : sn;
+  });
+}
+
+window.spectatorGoLive = async function(n) {
+  try { const snap = await getDoc(doc(db, 'petanque', 'status')); if (snap.exists()) handleLiveOpenChange(snap.data().liveOpen === true); } catch (e) {}
+  if (!LIVE_FREE_PAGES.includes(n) && isLiveBlocked()) {
+    pendingSpecTarget = n;
+    const overlay = document.getElementById('liveClosedOverlay');
+    if (overlay) overlay.style.display = 'flex';
+    return;
+  }
+  goTo(n);
+};
+
+window.toggleRules = function() {
+  ST.rulesOpen = !ST.rulesOpen;
+  const el = document.getElementById('rulesModal');
+  if (el) el.style.display = ST.rulesOpen ? 'flex' : 'none';
+  if (!ST.rulesOpen) handleLiveOpenChange(ST.liveOpen);
+};
+
+// ═══════════════════════════════════════════════════════════
+// CONFIGURATION
+// ═══════════════════════════════════════════════════════════
+function syncCfgForm() {
+  const c = ST.cfg;
+  const set = (id, v) => { const el = document.getElementById(id); if (el && document.activeElement !== el) el.value = v; };
+  set('cfgName', c.name); set('cfgClub', c.club);
+  set('cfgN', c.n); set('cfgCourts', c.courts);
+  set('cfgMt', c.mt); set('cfgTt', c.tt); set('cfgStart', c.start);
+  set('cfgScoreMax', c.scoreMax); set('cfgEcart', c.ecart);
+  const bal = document.getElementById('cfgBalance'); if (bal) bal.value = c.balance;
+  renderPausesEditor();
+  renderCfgSummary();
+}
+
+function pauseSummaryText(p) {
+  return p.mode === 'betweenPhases'
+    ? `${p.label || 'Pause'} de <strong>${p.min} min</strong> entre la Phase 1 et la Phase 2`
+    : `${p.label || 'Pause'} de <strong>${p.min} min</strong> après le tour <strong>${p.afterRound}</strong>`;
+}
+
+function renderCfgSummary() {
+  const el = document.getElementById('cfgSummary'); if (!el) return;
+  const c = ST.cfg;
+  const numGroups = computeGroupSizes(c.n).length;
+  const nPrincipale = numGroups * 2, nConsolante = c.n - nPrincipale;
+  const pauses = Array.isArray(c.pauses) ? c.pauses : [];
+  const pauseTxt = pauses.length ? ' · 🍽️ ' + pauses.map(pauseSummaryText).join(' · ') : '';
+  el.innerHTML = `<div class="info info-b">
+    🎯 <strong>${c.n}</strong> équipes (${c.n * 2} joueurs) · <strong>${numGroups}</strong> groupes de 4 en Phase 1 ·
+    <strong>${c.courts}</strong> terrains · partie ≈ <strong>${c.mt} min</strong> (+${c.tt} min battement) ·
+    Score : <strong>${c.scoreMax} pts</strong> avec <strong>${c.ecart} pts d'écart</strong> min${pauseTxt}<br>
+    📊 Phase 2 : <strong>${nPrincipale}</strong> équipes en Principale · <strong>${nConsolante}</strong> en Consolante
+  </div>`;
+}
+
+function renderPausesEditor() {
+  const el = document.getElementById('pausesEditorEl'); if (!el) return;
+  const pauses = Array.isArray(ST.cfg.pauses) ? ST.cfg.pauses : [];
+  if (!pauses.length) { el.innerHTML = '<div class="info info-b">Aucune pause programmée.</div>'; return; }
+  el.innerHTML = pauses.map(p => `
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;background:var(--s1);border:1px solid var(--bdr);border-radius:10px;padding:8px 10px;margin-bottom:6px">
+      <input type="text" value="${p.label || ''}" style="width:140px" placeholder="Nom (ex: Pause déjeuner)" onchange="onPauseFieldChange('${p.id}','label',this.value)">
+      <select onchange="onPauseFieldChange('${p.id}','mode',this.value)">
+        <option value="afterRound" ${p.mode === 'afterRound' ? 'selected' : ''}>Après le tour de poules n°</option>
+        <option value="betweenPhases" ${p.mode === 'betweenPhases' ? 'selected' : ''}>Entre Phase 1 et Phase 2</option>
+      </select>
+      ${p.mode === 'afterRound' ? `<input type="number" min="1" max="20" value="${p.afterRound || 1}" style="width:60px" onchange="onPauseFieldChange('${p.id}','afterRound',this.value)">` : ''}
+      <span style="display:flex;align-items:center;gap:4px"><input type="number" min="0" max="240" value="${p.min || 0}" style="width:70px" onchange="onPauseFieldChange('${p.id}','min',this.value)"> min</span>
+      <button class="btn btn-ghost btn-xs" onclick="removePauseRow('${p.id}')" style="color:var(--red)">✕ Retirer</button>
+    </div>`).join('');
+}
+
+window.addPauseRow = function() {
+  if (!Array.isArray(ST.cfg.pauses)) ST.cfg.pauses = [];
+  ST.cfg.pauses.push({ id: 'pz' + Date.now() + Math.floor(Math.random() * 1000), label: ST.cfg.pauses.length ? 'Pause' : 'Pause déjeuner', mode: 'afterRound', afterRound: 1, min: 20 });
+  renderPausesEditor(); renderCfgSummary();
+  if (isAdmin()) saveTournament({ cfg: ST.cfg });
+};
+
+window.removePauseRow = function(id) {
+  ST.cfg.pauses = (ST.cfg.pauses || []).filter(p => p.id !== id);
+  renderPausesEditor(); renderCfgSummary();
+  if (isAdmin()) saveTournament({ cfg: ST.cfg });
+};
+
+window.onPauseFieldChange = function(id, field, value) {
+  const p = (ST.cfg.pauses || []).find(x => x.id === id); if (!p) return;
+  if (field === 'min' || field === 'afterRound') value = Math.max(field === 'afterRound' ? 1 : 0, +value || 0);
+  p[field] = value;
+  if (field === 'mode') renderPausesEditor();
+  renderCfgSummary();
+  if (isAdmin()) saveTournament({ cfg: ST.cfg });
+};
+
+window.onCfgChange = function() {
+  ST.cfg.name   = document.getElementById('cfgName').value.trim() || 'Trophée Pétanque Doublette';
+  ST.cfg.club   = document.getElementById('cfgClub').value.trim();
+  ST.cfg.n      = Math.max(16, Math.min(64, +document.getElementById('cfgN').value || 16));
+  ST.cfg.courts = Math.max(8,  Math.min(32, +document.getElementById('cfgCourts').value || 8));
+  ST.cfg.mt     = Math.max(20, Math.min(90, +document.getElementById('cfgMt').value || 45));
+  ST.cfg.tt     = Math.max(0,  Math.min(30, +document.getElementById('cfgTt').value || 10));
+  ST.cfg.start  = document.getElementById('cfgStart').value || '09:00';
+  ST.cfg.scoreMax = Math.max(11, Math.min(25, +document.getElementById('cfgScoreMax').value || 13));
+  ST.cfg.ecart  = Math.max(1,  Math.min(3, +document.getElementById('cfgEcart').value || 2));
+  ST.cfg.balance = document.getElementById('cfgBalance').value || 'level';
+  renderCfgSummary();
+  document.title = '🎯 ' + ST.cfg.name;
+  const brandEl = document.getElementById('hdrBrandText'); if (brandEl) brandEl.textContent = '🎯 ' + ST.cfg.name;
+};
+
+window.saveCfgAndNext = async function() {
+  onCfgChange();
+  await saveTournament({ cfg: ST.cfg });
+  goTo(2);
+};
+
+window.goToPlanningFromTeams = function() {
+  if (ST.teams.length !== ST.cfg.n) { alert(`Il faut exactement ${ST.cfg.n} équipes (actuellement ${ST.teams.length}).`); return; }
+  goTo(3);
+};
+
+// ═══════════════════════════════════════════════════════════
+// ÉQUIPES
+// ═══════════════════════════════════════════════════════════
+function renderTeamsPage() {
+  const el = document.getElementById('teamsListEl'); if (!el) return;
+  const need = ST.cfg.n - ST.teams.length;
+  const counterEl = document.getElementById('teamsCounter');
+  if (counterEl) counterEl.innerHTML = need > 0
+    ? `<span style="color:var(--ylw)">⚠ Encore ${need} équipe${need > 1 ? 's' : ''} à ajouter (objectif : ${ST.cfg.n})</span>`
+    : `<span style="color:var(--grn)">✓ ${ST.teams.length} équipes sur ${ST.cfg.n}</span>`;
+  el.innerHTML = ST.teams.map((t, i) => `
+    <div style="display:flex;align-items:center;gap:10px;background:var(--s1);border:1px solid var(--bdr);border-radius:10px;padding:10px 14px;margin-bottom:6px">
+      <div style="font-family:'Oswald',sans-serif;font-weight:700;color:var(--dim);width:28px">${i + 1}</div>
+      <div style="flex:1">
+        <div style="font-weight:700">${t.name}</div>
+        <div style="font-size:12px;color:var(--muted)">${t.p1} · ${t.p2}${t.club ? ' — ' + t.club : ''} ${'⭐'.repeat(t.lv || 3)}</div>
+      </div>
+      ${isAdmin() ? `<button class="btn btn-ghost btn-xs" onclick="openEditTeam('${t.id}')">✏️</button>
+      <button class="btn btn-ghost btn-xs" onclick="removeTeam('${t.id}')" style="color:var(--red)">🗑️</button>` : ''}
+    </div>`).join('') || '<div class="info info-b">Aucune équipe pour le moment.</div>';
+  updateFwdBtn();
+}
+
+window.openEditTeam = function(id) {
+  const t = id ? tObj(id) : { id: null, name: '', p1: '', p2: '', club: ST.cfg.club || '', lv: 3 };
+  document.getElementById('editTeamId').value = t.id || '';
+  document.getElementById('editP1').value = t.p1 || '';
+  document.getElementById('editP2').value = t.p2 || '';
+  document.getElementById('editClub').value = t.club || '';
+  document.getElementById('editLv').value = t.lv || 3;
+  document.getElementById('editTeamModal').style.display = 'flex';
+  document.getElementById('editTeamTitle').textContent = id ? 'Modifier l\'équipe' : 'Nouvelle équipe';
+};
+
+window.closeEditTeam = function() { document.getElementById('editTeamModal').style.display = 'none'; };
+
+window.saveEditTeam = async function() {
+  const id   = document.getElementById('editTeamId').value;
+  const p1   = document.getElementById('editP1').value.trim();
+  const p2   = document.getElementById('editP2').value.trim();
+  const club = document.getElementById('editClub').value.trim();
+  const lv   = +document.getElementById('editLv').value || 3;
+  if (!p1 || !p2) { alert('Les deux noms de joueurs sont requis.'); return; }
+  const name = p1 + ' / ' + p2;
+  if (id) {
+    const t = tObj(id); Object.assign(t, { p1, p2, club, lv, name });
+  } else {
+    if (ST.teams.length >= ST.cfg.n) { alert('Nombre d\'équipes déjà atteint (' + ST.cfg.n + ').'); return; }
+    ST.teams.push({ id: 't' + Date.now() + Math.floor(Math.random() * 1000), p1, p2, club, lv, name });
+  }
+  await saveTournament({ teams: ST.teams });
+  closeEditTeam(); renderTeamsPage();
+};
+
+window.removeTeam = async function(id) {
+  if (!confirm('Retirer cette équipe ?')) return;
+  ST.teams = ST.teams.filter(t => t.id !== id);
+  await saveTournament({ teams: ST.teams }); renderTeamsPage();
+};
+
+window.clearTeams = async function() {
+  if (!confirm('Vider toute la liste des équipes ?')) return;
+  ST.teams = []; await saveTournament({ teams: [] }); renderTeamsPage();
+};
+
+window.autoFillTeams = async function() {
+  const need = ST.cfg.n - ST.teams.length; if (need <= 0) return;
+  const clubs = ['RSTH','APC','Lauzerte','Montauban','Caussade','Moissac'];
+  for (let i = 0; i < need; i++) {
+    const k = ST.teams.length + 1;
+    ST.teams.push({ id: 't' + Date.now() + i, p1: 'Joueur ' + (k*2-1), p2: 'Joueur ' + (k*2),
+      club: clubs[i % clubs.length], lv: (i % 5) + 1, name: 'Joueur ' + (k*2-1) + ' / Joueur ' + (k*2) });
+  }
+  await saveTournament({ teams: ST.teams }); renderTeamsPage();
+};
+
+// ═══════════════════════════════════════════════════════════
+// PHASE 1 — GROUPES DE 4 (round-robin)
+// ═══════════════════════════════════════════════════════════
+function computeGroupSizes(n) {
+  let numGroups = Math.max(1, Math.round(n / 4));
+  while (n / numGroups > 5) numGroups++;
+  while (numGroups > 1 && n / numGroups < 3) numGroups--;
+  const base = Math.floor(n / numGroups), extra = n % numGroups;
+  const sizes = [];
+  for (let i = 0; i < numGroups; i++) sizes.push(base + (i < extra ? 1 : 0));
+  return sizes;
+}
+
+function buildGroupsPhase1() {
+  const sizes = computeGroupSizes(ST.teams.length);
+  const numGroups = sizes.length;
+  const pool = ST.cfg.balance === 'level'
+    ? ST.teams.slice().sort((a, b) => (b.lv || 3) - (a.lv || 3)).map(t => t.id)
+    : shuffle(ST.teams.map(t => t.id));
+  const groups = sizes.map((sz, i) => ({ id: 'G' + (i + 1), teamIds: [] }));
+  pool.forEach((tid, i) => { groups[i % numGroups].teamIds.push(tid); });
+  return groups;
+}
+
+function roundRobinPairs(teamIds) {
+  let arr = teamIds.slice();
+  const hasBye = arr.length % 2 === 1;
+  if (hasBye) arr.push(null);
+  const n = arr.length, rounds = [];
+  for (let r = 0; r < n - 1; r++) {
+    const pairs = [];
+    for (let i = 0; i < n / 2; i++) {
+      const a = arr[i], b = arr[n - 1 - i];
+      if (a !== null && b !== null) pairs.push([a, b]);
+    }
+    rounds.push(pairs);
+    arr = [arr[0], arr[n - 1], ...arr.slice(1, n - 1)];
+  }
+  return rounds;
+}
+
+function buildPoolSchedule() {
+  const courts = ST.cfg.courts, mt = ST.cfg.mt, tt = ST.cfg.tt || 10, start = ST.cfg.start || '09:00';
+  const pauses = Array.isArray(ST.cfg.pauses) ? ST.cfg.pauses : [];
+  const afterRoundPauses = pauses.filter(p => p.mode === 'afterRound' && (+p.afterRound || 0) > 0 && (+p.min || 0) > 0);
+  const groupRounds = ST.groups.map(g => roundRobinPairs(g.teamIds));
+  const maxRounds = Math.max(0, ...groupRounds.map(r => r.length));
+  const schedule = []; let counter = 0, elapsed = 0;
+  for (let r = 0; r < maxRounds; r++) {
+    const roundMatches = [];
+    ST.groups.forEach((g, gi) => { (groupRounds[gi][r] || []).forEach(([a, b]) => roundMatches.push({ group: g.id, a, b })); });
+    const waveCount = Math.max(1, Math.ceil(roundMatches.length / courts));
+    for (let w = 0; w < waveCount; w++) {
+      const waveTime = addMinutes(start, elapsed);
+      roundMatches.slice(w * courts, (w + 1) * courts).forEach((m, ci) => {
+        schedule.push({ matchId: 'p1-' + m.group + '-' + (counter++), group: m.group, round: r, wave: w, court: ci + 1, time: waveTime, a: m.a, b: m.b });
+      });
+      elapsed += mt + tt;
+    }
+    afterRoundPauses.forEach(p => { if (+p.afterRound === (r + 1)) elapsed += +p.min; });
+  }
+  return schedule;
+}
+
+function getPoolResult(matchId) { const d = ST.results[matchId] || {}; return { ga: d.ga != null ? d.ga : '', gb: d.gb != null ? d.gb : '' }; }
+
+window.setPoolResult = async function(matchId, f, v) {
+  if (!isScorer()) return;
+  const cur = ST.results[matchId] || { ga: '', gb: '' };
+  cur[f] = v === '' ? '' : Math.max(0, Math.min(ST.cfg.scoreMax + 5, +v));
+  ST.results[matchId] = cur;
+  await saveResult(matchId, cur.ga, cur.gb, false);
+  refreshCurrentPage();
+};
+
+function computeGroupStandings(groupId) {
+  const g = ST.groups.find(x => x.id === groupId); if (!g) return [];
+  const stats = {};
+  g.teamIds.forEach(id => stats[id] = { id, pts: 0, j: 0, w: 0, l: 0, bp: 0, bc: 0, diff: 0 });
+  ST.poolSchedule.filter(m => m.group === groupId).forEach(m => {
+    const r = getPoolResult(m.matchId);
+    if (r.ga === '' || r.gb === '') return;
+    const ga = +r.ga, gb = +r.gb;
+    if (!stats[m.a] || !stats[m.b]) return;
+    stats[m.a].j++; stats[m.b].j++;
+    stats[m.a].bp += ga; stats[m.a].bc += gb;
+    stats[m.b].bp += gb; stats[m.b].bc += ga;
+    if (ga > gb) { stats[m.a].w++; stats[m.a].pts += 2; stats[m.b].l++; }
+    else         { stats[m.b].w++; stats[m.b].pts += 2; stats[m.a].l++; }
+  });
+  Object.values(stats).forEach(s => s.diff = s.bp - s.bc);
+  const list = Object.values(stats);
+  list.sort((a, b) => {
+    if (b.pts !== a.pts) return b.pts - a.pts;
+    const matchAB = ST.poolSchedule.find(m => m.group === groupId && ((m.a===a.id&&m.b===b.id)||(m.a===b.id&&m.b===a.id)));
+    if (matchAB) {
+      const r = getPoolResult(matchAB.matchId);
+      if (r.ga !== '' && r.gb !== '') {
+        const gaA = matchAB.a===a.id ? +r.ga : +r.gb;
+        const gaB = matchAB.a===b.id ? +r.ga : +r.gb;
+        if (gaA !== gaB) return gaB - gaA;
+      }
+    }
+    if (b.diff !== a.diff) return b.diff - a.diff;
+    return b.bp - a.bp;
+  });
+  return list;
+}
+
+function isGroupDone(groupId) {
+  return ST.poolSchedule.filter(m => m.group === groupId).every(m => { const r = getPoolResult(m.matchId); return r.ga !== '' && r.gb !== ''; });
+}
+
+function allPoolsDone() { return ST.groups.length > 0 && ST.groups.every(g => isGroupDone(g.id)); }
+
+function renderPlanningPreview() {
+  const el = document.getElementById('planningPreviewEl'); if (!el) return;
+  if (!ST.groups.length) ST.groups = buildGroupsPhase1();
+  if (!ST.poolSchedule.length) ST.poolSchedule = buildPoolSchedule();
+  const numRounds = Math.max(0, ...ST.poolSchedule.map(m => m.round)) + 1;
+  const endTime = ST.poolSchedule.length > 0 ? ST.poolSchedule[ST.poolSchedule.length - 1].time : '--:--';
+  const pausesList = Array.isArray(ST.cfg.pauses) ? ST.cfg.pauses : [];
+  const pauseTxt = pausesList.length ? ' · 🍽️ ' + pausesList.map(p => 'prévue : ' + pauseSummaryText(p)).join(' · ') : '';
+  el.innerHTML = `
+    <div class="info info-b" style="margin-bottom:12px">📋 <strong>${ST.groups.length}</strong> groupes · <strong>${ST.poolSchedule.length}</strong> matchs de phase 1 répartis sur <strong>${numRounds}</strong> tour${numRounds>1?'s':''} · Dernier match prévu vers <strong>${endTime}</strong>${pauseTxt}</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin:14px 0">
+      ${ST.groups.map(g => `<div style="background:var(--s1);border:1px solid var(--bdr);border-radius:10px;padding:10px 12px">
+        <div style="font-family:'Oswald',sans-serif;font-weight:700;color:var(--brand);margin-bottom:6px">Groupe ${g.id.slice(1)}</div>
+        ${g.teamIds.map(id => `<div style="font-size:13px;padding:2px 0">${tName(id)} <span style="color:var(--muted);font-size:11px">${tClub(id)?'— '+tClub(id):''}</span></div>`).join('')}
+      </div>`).join('')}
+    </div>
+    ${isAdmin() ? `<div style="display:flex;gap:10px;flex-wrap:wrap">
+      <button class="btn btn-ghost btn-sm" onclick="regeneratePlanning()">🔄 Régénérer (nouveau tirage)</button>
+      <button class="btn btn-b btn-sm" onclick="startTournament()">▶️ Démarrer le tournoi</button>
+    </div>` : ''}
+  `;
+}
+
+window.regeneratePlanning = async function() {
+  if (!confirm('Régénérer un nouveau tirage des groupes ?')) return;
+  ST.groups = buildGroupsPhase1(); ST.poolSchedule = buildPoolSchedule();
+  await saveTournament({ groups: ST.groups, poolSchedule: ST.poolSchedule });
+  renderPlanningPreview();
+};
+
+window.startTournament = async function() {
+  if (!isAdmin()) return;
+  if (!confirm('Démarrer le tournoi ? Les équipes et groupes seront verrouillés.')) return;
+  ST.phase = 'pools'; ST.activePoolRound = 0;
+  await saveTournament({ groups: ST.groups, poolSchedule: ST.poolSchedule, phase: 'pools', activePoolRound: 0, liveOpen: true });
+  goTo(4);
+};
+
+// ═══════════════════════════════════════════════════════════
+// PHASE 2 — TABLEAUX Principale & Consolante
+// ═══════════════════════════════════════════════════════════
+function nextPow2(n) { let p = 1; while (p < n) p *= 2; return p; }
+
+function seedOrder(size) {
+  let order = [1, 2];
+  while (order.length < size) {
+    const len = order.length * 2, next = [];
+    order.forEach(s => { next.push(s); next.push(len + 1 - s); });
+    order = next;
+  }
+  return order;
+}
+
+function buildBracketSeeds(seedsArray) {
+  const N = seedsArray.length;
+  if (N === 0) return null;
+  if (N === 1) return { slots: [seedsArray[0].teamId], depth: 0, teamCount: 1, autoWinner: seedsArray[0].teamId };
+  const size = nextPow2(N);
+  const order = seedOrder(size);
+  const slots = order.map(seedNum => seedNum <= N ? seedsArray[seedNum - 1].teamId : null);
+  const groupOf = {}; seedsArray.forEach(s => groupOf[s.teamId] = s.groupId);
+  for (let pass = 0; pass < 4; pass++) {
+    let conflict = false;
+    for (let i = 0; i < slots.length; i += 2) {
+      const a = slots[i], b = slots[i + 1];
+      if (a == null || b == null) continue;
+      if (groupOf[a] && groupOf[a] === groupOf[b]) {
+        conflict = true;
+        for (let j = i + 2; j < slots.length; j += 2) {
+          const c = slots[j]; if (c == null) continue;
+          if (groupOf[c] !== groupOf[a]) { slots[j] = b; slots[i + 1] = c; break; }
+        }
+      }
+    }
+    if (!conflict) break;
+  }
+  const byeMatches = [];
+  for (let i = 0; i < slots.length; i += 2) {
+    const a = slots[i], b = slots[i + 1];
+    if ((a == null) !== (b == null)) byeMatches.push({ idx: i / 2 });
+  }
+  return { slots, depth: Math.log2(size), teamCount: N, byeRound0: byeMatches.map(m => m.idx) };
+}
+
+window.buildBrackets = async function() {
+  if (!isAdmin()) return;
+  if (!allPoolsDone()) { alert('Impossible : tous les matchs de poules doivent être terminés.'); return; }
+  const rank1 = [], rank2 = [], rest = [];
+  ST.groups.forEach(g => {
+    const st = computeGroupStandings(g.id);
+    st.forEach((s, rank) => {
+      const obj = { teamId: s.id, groupId: g.id };
+      if (rank === 0) rank1.push(obj);
+      else if (rank === 1) rank2.push(obj);
+      else rest.push(obj);
+    });
+  });
+  const principaleSeeds = rank1.concat(rank2.slice().reverse());
+  const consolanteSeeds = rest;
+  ST.brackets = { P: buildBracketSeeds(principaleSeeds), C: buildBracketSeeds(consolanteSeeds) };
+  ['P', 'C'].forEach(bk => {
+    const br = ST.brackets[bk]; if (!br || !br.byeRound0) return;
+    br.byeRound0.forEach(idx => {
+      const { a, b } = bracketMatchTeams(bk, 0, idx);
+      const winner = a ?? b;
+      if (winner) {
+        const id = bracketMatchId(bk, 0, idx);
+        ST.results[id] = { ga: a ? ST.cfg.scoreMax : 0, gb: b ? ST.cfg.scoreMax : 0, bye: true };
+        saveResult(id, ST.results[id].ga, ST.results[id].gb, true);
+      }
+    });
+  });
+  ST.phase = 'bracket'; ST.activeBracketRound = { P: 0, C: 0 };
+  await saveTournament({ brackets: ST.brackets, phase: 'bracket', activeBracketRound: { P: 0, C: 0 } });
+  goTo(4);
+};
+
+function bracketMatchId(bracket, round, idx) { return 'br-' + bracket + '-r' + round + '-m' + idx; }
+
+function bracketMatchTeams(bracket, round, idx) {
+  const br = ST.brackets[bracket]; if (!br) return { a: null, b: null };
+  if (round === 0) return { a: br.slots[idx * 2] ?? null, b: br.slots[idx * 2 + 1] ?? null };
+  return { a: bracketWinner(bracket, round - 1, idx * 2), b: bracketWinner(bracket, round - 1, idx * 2 + 1) };
+}
+
+function getBracketResult(bracket, round, idx) {
+  const id = bracketMatchId(bracket, round, idx);
+  const d = ST.results[id] || {};
+  return { ga: d.ga != null ? d.ga : '', gb: d.gb != null ? d.gb : '', bye: !!d.bye };
+}
+
+function bracketWinner(bracket, round, idx) {
+  const { a, b } = bracketMatchTeams(bracket, round, idx);
+  if (a == null && b == null) return null;
+  if (a == null) return b; if (b == null) return a;
+  const r = getBracketResult(bracket, round, idx);
+  if (r.ga === '' || r.gb === '') return null;
+  return (+r.ga > +r.gb) ? a : b;
+}
+
+function bracketLoser(bracket, round, idx) {
+  const { a, b } = bracketMatchTeams(bracket, round, idx);
+  if (a == null || b == null) return null;
+  const r = getBracketResult(bracket, round, idx);
+  if (r.ga === '' || r.gb === '') return null;
+  return (+r.ga > +r.gb) ? b : a;
+}
+
+// ═══════════════════════════════════════════════════════════
+// SYSTÈME GÉNÉRIQUE DE CLASSEMENT COMPLET
+// ═══════════════════════════════════════════════════════════
+function nodeMatchId(bracket, path, round, idx) {
+  if (!path.length) return bracketMatchId(bracket, round, idx);
+  return 'br-' + bracket + '-cl' + path.join('-') + '-r' + round + '-m' + idx;
+}
+
+function nodeMatchTeams(bracket, node, path, round, idx) {
+  if (!path.length) return bracketMatchTeams(bracket, round, idx);
+  if (round === 0) return { a: node.slots[idx * 2] ?? null, b: node.slots[idx * 2 + 1] ?? null };
+  return { a: nodeWinner(bracket, node, path, round - 1, idx * 2), b: nodeWinner(bracket, node, path, round - 1, idx * 2 + 1) };
+}
+
+function nodeResultOf(bracket, path, round, idx) {
+  if (!path.length) return getBracketResult(bracket, round, idx);
+  const id = nodeMatchId(bracket, path, round, idx);
+  const d = ST.results[id] || {};
+  return { ga: d.ga != null ? d.ga : '', gb: d.gb != null ? d.gb : '', bye: !!d.bye };
+}
+
+function nodeWinner(bracket, node, path, round, idx) {
+  if (!path.length) return bracketWinner(bracket, round, idx);
+  const { a, b } = nodeMatchTeams(bracket, node, path, round, idx);
+  if (a == null && b == null) return null;
+  if (a == null) return b; if (b == null) return a;
+  const r = nodeResultOf(bracket, path, round, idx);
+  if (r.ga === '' || r.gb === '') return null;
+  return (+r.ga > +r.gb) ? a : b;
+}
+
+function nodeLoser(bracket, node, path, round, idx) {
+  if (!path.length) return bracketLoser(bracket, round, idx);
+  const { a, b } = nodeMatchTeams(bracket, node, path, round, idx);
+  if (a == null || b == null) return null;
+  const r = nodeResultOf(bracket, path, round, idx);
+  if (r.ga === '' || r.gb === '') return null;
+  return (+r.ga > +r.gb) ? b : a;
+}
+
+function nodeRoundMatchCount(node, round) { return node.slots.length / Math.pow(2, round + 1); }
+
+function isMatchDone(bracket, node, path, round, idx) {
+  const { a, b } = nodeMatchTeams(bracket, node, path, round, idx);
+  if (a == null || b == null) return true;
+  const r = nodeResultOf(bracket, path, round, idx);
+  return r.ga !== '' && r.gb !== '';
+}
+
+function isNodeRoundDone(bracket, node, path, round) {
+  const n = nodeRoundMatchCount(node, round);
+  for (let idx = 0; idx < n; idx++) if (!isMatchDone(bracket, node, path, round, idx)) return false;
+  return true;
+}
+
+function getLoserSubNode(bracket, node, path, round) {
+  if (round >= node.depth - 1) return null;
+  if (!isNodeRoundDone(bracket, node, path, round)) return null;
+  const n = nodeRoundMatchCount(node, round);
+  const losers = [];
+  for (let idx = 0; idx < n; idx++) { const l = nodeLoser(bracket, node, path, round, idx); if (l) losers.push({ teamId: l, groupId: null }); }
+  if (!losers.length) return null;
+  return buildBracketSeeds(losers);
+}
+
+function rankNode(bracket, node, path) {
+  if (!node || !node.teamCount) return [];
+  if (node.depth === 0) return node.autoWinner ? [{ teamId: node.autoWinner, place: 1 }] : [];
+  const out = []; let place = 1;
+  const fr = node.depth - 1;
+  const w = nodeWinner(bracket, node, path, fr, 0);
+  const l = nodeLoser(bracket, node, path, fr, 0);
+  if (w) { out.push({ teamId: w, place }); place++; }
+  if (l) { out.push({ teamId: l, place }); place++; }
+  for (let r = fr - 1; r >= 0; r--) {
+    const sub = getLoserSubNode(bracket, node, path, r);
+    if (sub) {
+      rankNode(bracket, sub, [...path, r]).forEach(x => out.push({ teamId: x.teamId, place: place + x.place - 1, tied: x.tied }));
+      place += sub.teamCount;
+    } else {
+      const n = nodeRoundMatchCount(node, r);
+      const losers = [];
+      for (let idx = 0; idx < n; idx++) { const lo = nodeLoser(bracket, node, path, r, idx); if (lo) losers.push(lo); }
+      if (losers.length) { losers.forEach(tid => out.push({ teamId: tid, place, tied: true })); place += losers.length; }
+    }
+  }
+  return out;
+}
+
+function collectGlobalRoundMatches(bracket) {
+  const br = ST.brackets[bracket];
+  const out = [];
+  if (!br || !br.teamCount || br.depth === 0) return out;
+  for (let g = 0; g < br.depth; g++) out.push([]);
+  (function walk(node, path, startGlobal) {
+    for (let j = 0; j < node.depth; j++) {
+      const g = startGlobal + j;
+      if (g < out.length) {
+        const n = nodeRoundMatchCount(node, j);
+        for (let idx = 0; idx < n; idx++) out[g].push({ node, path, round: j, idx });
+      }
+      if (j < node.depth - 1) {
+        const sub = getLoserSubNode(bracket, node, path, j);
+        if (sub) walk(sub, [...path, j], g + 1);
+      }
+    }
+  })(br, [], 0);
+  return out;
+}
+
+function idealGroupSizes(depth, teamCount) {
+  if (depth <= 0) return [Math.max(1, teamCount)];
+  if (depth === 1) return [teamCount];
+  const sizes = [2]; let sum = 2;
+  for (let r = depth - 2; r >= 1; r--) { const s = Math.pow(2, depth - 1 - r); sizes.push(s); sum += s; }
+  sizes.push(Math.max(0, teamCount - sum));
+  return sizes;
+}
+
+function computeAbsolutePlaceOffset(bracket, path) {
+  let node = ST.brackets[bracket], nodePath = [], offset = 0;
+  for (let i = 0; i < path.length; i++) {
+    const r = path[i];
+    const sizes = idealGroupSizes(node.depth, node.teamCount);
+    const k = node.depth - 1 - r;
+    for (let j = 0; j < k && j < sizes.length; j++) offset += sizes[j];
+    const sub = getLoserSubNode(bracket, node, nodePath, r);
+    if (!sub) return offset;
+    node = sub; nodePath = [...nodePath, r];
+  }
+  return offset;
+}
+
+function nodePlaceStakes(bracket, node, path, round) {
+  const offset = computeAbsolutePlaceOffset(bracket, path);
+  if (round === node.depth - 1) {
+    const lo = offset + 1, hi = offset + Math.min(2, node.teamCount);
+    return { isFinal: true, lo, hi };
+  }
+  const sizes = idealGroupSizes(node.depth, node.teamCount);
+  const k = node.depth - 1 - round;
+  let before = 0; for (let j = 0; j < k; j++) before += sizes[j] || 0;
+  const subSize = sizes[k] || 0;
+  return { isFinal: false, winnerLo: offset + 1, winnerHi: offset + before, loserLo: offset + before + 1, loserHi: offset + before + subSize };
+}
+
+function theoreticalGlobalRoundMatchCounts(bracket) {
+  const br = ST.brackets[bracket];
+  const counts = [];
+  if (!br || !br.teamCount || br.depth === 0) return counts;
+  for (let g = 0; g < br.depth; g++) counts.push(0);
+  (function walk(depth, teamCount, startGlobal) {
+    if (depth <= 0 || teamCount <= 0) return;
+    for (let j = 0; j < depth; j++) {
+      const g = startGlobal + j;
+      const slotsLen = Math.pow(2, depth);
+      const matchCount = slotsLen / Math.pow(2, j + 1);
+      if (g < counts.length) counts[g] += matchCount;
+      if (j < depth - 1) {
+        const sizes = idealGroupSizes(depth, teamCount);
+        const k = depth - 1 - j;
+        const subTeamCount = sizes[k] || 0;
+        if (subTeamCount > 0) {
+          const subDepth = subTeamCount <= 1 ? 0 : Math.ceil(Math.log2(subTeamCount));
+          walk(subDepth, subTeamCount, g + 1);
+        }
+      }
+    }
+  })(br.depth, br.teamCount, 0);
+  return counts;
+}
+
+function computeBracketRoundTimes() {
+  const countsP = theoreticalGlobalRoundMatchCounts('P');
+  const countsC = theoreticalGlobalRoundMatchCounts('C');
+  const maxG = Math.max(countsP.length, countsC.length);
+  const courts = ST.cfg.courts || 8, mt = ST.cfg.mt || 45, tt = ST.cfg.tt || 10;
+  const lastPool = ST.poolSchedule.length ? ST.poolSchedule[ST.poolSchedule.length - 1].time : (ST.cfg.start || '09:00');
+  let bracketStart = ST.poolSchedule.length ? addMinutes(lastPool, mt + tt) : (ST.cfg.start || '09:00');
+  const betweenPauses = (Array.isArray(ST.cfg.pauses) ? ST.cfg.pauses : []).filter(p => p.mode === 'betweenPhases' && (+p.min || 0) > 0);
+  betweenPauses.forEach(p => { bracketStart = addMinutes(bracketStart, +p.min); });
+  const times = []; let elapsed = 0;
+  for (let g = 0; g < maxG; g++) {
+    times.push(addMinutes(bracketStart, elapsed));
+    const total = (countsP[g] || 0) + (countsC[g] || 0);
+    const waves = Math.max(1, Math.ceil(total / courts));
+    elapsed += waves * (mt + tt);
+  }
+  return times;
+}
+
+function bracketRoundName(depth, round) {
+  const remaining = depth - round;
+  const names = { 1: 'Finale', 2: 'Demi-finale', 3: 'Quart de finale', 4: '8e de finale', 5: '16e de finale', 6: '32e de finale' };
+  return names[remaining] || (remaining + 'e tour');
+}
+
+function bracketRoundMatchCount(bracket, round) {
+  const br = ST.brackets[bracket]; if (!br) return 0;
+  return br.slots.length / Math.pow(2, round + 1);
+}
+
+function isBracketRoundDone(bracket, round) {
+  const n = bracketRoundMatchCount(bracket, round);
+  for (let idx = 0; idx < n; idx++) {
+    const { a, b } = bracketMatchTeams(bracket, round, idx);
+    if (a == null || b == null) continue;
+    const r = getBracketResult(bracket, round, idx);
+    if (r.ga === '' || r.gb === '') return false;
+  }
+  return true;
+}
+
+window.setNodeResult = async function(bracket, pathStr, round, idx, f, v) {
+  if (!isScorer()) return;
+  const path = pathStr ? pathStr.split('-').map(Number) : [];
+  const id = nodeMatchId(bracket, path, round, idx);
+  const cur = ST.results[id] || { ga: '', gb: '' };
+  cur[f] = v === '' ? '' : Math.max(0, Math.min(ST.cfg.scoreMax + 5, +v));
+  ST.results[id] = cur;
+  await saveResult(id, cur.ga, cur.gb, false);
+  refreshCurrentPage();
+};
+
+function updateBuildBracketsBtn() {
+  const btn = document.getElementById('buildBracketsBtn'); if (!btn) return;
+  const missing = ST.groups.reduce((sum, g) => sum + ST.poolSchedule.filter(m => m.group === g.id).filter(m => { const r = getPoolResult(m.matchId); return !(r.ga !== '' && r.gb !== ''); }).length, 0);
+  btn.disabled = missing > 0;
+  btn.title = missing > 0 ? `${missing} match(s) de poule restant(s)` : 'Toutes les poules sont terminées';
+  btn.textContent = missing > 0 ? `🔒 Tableaux Phase 2 (${missing} match${missing > 1 ? 's' : ''} restant${missing > 1 ? 's' : ''})` : '2️⃣ Composer les tableaux (Phase 2)';
+}
+
+// ═══════════════════════════════════════════════════════════
+// CLASSEMENT FINAL
+// ═══════════════════════════════════════════════════════════
+function computeFinalRanking() {
+  const ranking = []; let baseOffset = 0;
+  ['P', 'C'].forEach(bk => {
+    const br = ST.brackets[bk]; if (!br || !br.teamCount) return;
+    const label = bk === 'P' ? 'Principale' : 'Consolante';
+    const ranked = rankNode(bk, br, []).sort((a, b) => a.place - b.place);
+    ranked.forEach(r => ranking.push({ place: baseOffset + r.place, teamId: r.teamId, label, tied: r.tied }));
+    baseOffset += br.teamCount;
+  });
+  return ranking;
+}
+
+function renderFinalPage() {
+  const el = document.getElementById('finalRankingTable'); if (!el) return;
+  const ranking = computeFinalRanking();
+  if (!ranking.length) { el.innerHTML = '<div class="info info-b">Le classement final s\'affichera une fois la phase 2 lancée.</div>'; return; }
+  const med = ['🥇', '🥈', '🥉'];
+  const podium = ranking.slice(0, 3);
+  el.innerHTML = `
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:20px">
+      ${podium.map(r => `<div style="background:var(--s1);border:2px solid var(--brand);border-radius:12px;padding:16px;text-align:center">
+        <div style="font-size:32px">${med[r.place - 1] || r.place}</div>
+        <div style="font-family:'Oswald',sans-serif;font-weight:700;margin-top:6px">${tName(r.teamId)}</div>
+        <div style="font-size:11px;color:var(--muted)">${tClub(r.teamId)}</div>
+      </div>`).join('')}
+    </div>
+    <table style="width:100%;border-collapse:collapse">
+      <thead><tr style="border-bottom:2px solid var(--bdr)">
+        <th style="text-align:left;padding:8px">Place</th>
+        <th style="text-align:left;padding:8px">Équipe</th>
+        <th style="text-align:left;padding:8px">Joueurs</th>
+        <th style="text-align:left;padding:8px">Club</th>
+        <th style="text-align:left;padding:8px">Tableau</th>
+      </tr></thead>
+      <tbody>${ranking.map(r => `<tr style="border-bottom:1px solid var(--bdr)">
+        <td style="padding:8px;font-weight:700">${r.tied ? '≈ ' : ''}${r.place}${r.place <= 3 ? med[r.place - 1] : ''}</td>
+        <td style="padding:8px;font-weight:600">${tName(r.teamId)}</td>
+        <td style="padding:8px;font-size:12px;color:var(--muted)">${tObj(r.teamId)?.p1} · ${tObj(r.teamId)?.p2}</td>
+        <td style="padding:8px;font-size:12px;color:var(--muted)">${tClub(r.teamId)}</td>
+        <td style="padding:8px;color:var(--muted);font-size:12px">${r.label}</td>
+      </tr>`).join('')}</tbody>
+    </table>`;
+}
+
+// ═══════════════════════════════════════════════════════════
+// RENDU — PAGE 4 TOURNOI EN DIRECT
+// ═══════════════════════════════════════════════════════════
+function scoreInputHTML(ga, gb, onA, onB, disabled) {
+  if (disabled) {
+    return `<span style="font-family:'Oswald',sans-serif;font-weight:700;font-size:20px">${ga === '' ? '–' : ga}</span>
+      <span style="opacity:.5">–</span>
+      <span style="font-family:'Oswald',sans-serif;font-weight:700;font-size:20px">${gb === '' ? '–' : gb}</span>`;
+  }
+  return `<input type="number" min="0" max="${ST.cfg.scoreMax + 5}" value="${ga}" placeholder="0"
+    style="width:52px;text-align:center;font-family:'Oswald',sans-serif;font-weight:700;font-size:18px;border:1px solid var(--bdr2);border-radius:6px;padding:4px"
+    onchange="${onA}">
+    <span style="opacity:.5">–</span>
+    <input type="number" min="0" max="${ST.cfg.scoreMax + 5}" value="${gb}" placeholder="0"
+    style="width:52px;text-align:center;font-family:'Oswald',sans-serif;font-weight:700;font-size:18px;border:1px solid var(--bdr2);border-radius:6px;padding:4px"
+    onchange="${onB}">`;
+}
+
+function poolMatchCardHTML(m) {
+  const r = getPoolResult(m.matchId);
+  const done = r.ga !== '' && r.gb !== '';
+  const ecartOk = done && Math.abs(+r.ga - +r.gb) >= ST.cfg.ecart;
+  const warn = done && !ecartOk ? `<span style="color:var(--ylw);font-size:11px">⚠ écart < ${ST.cfg.ecart} pts</span>` : '';
+  return `<div style="background:var(--s1);border:1px solid ${done?(ecartOk?'var(--grn)':'var(--ylw)'):'var(--bdr)'};border-radius:10px;padding:10px 14px;margin-bottom:8px">
+    <div style="font-size:11px;color:var(--muted);display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px">
+      <span>Groupe ${m.group.slice(1)} · Terrain ${m.court}</span><span>${m.time || ''}</span>${warn}
+    </div>
+    <div style="display:flex;align-items:center;gap:10px;margin-top:6px">
+      <div style="flex:1;font-weight:600">${tName(m.a)}</div>
+      ${scoreInputHTML(r.ga, r.gb, `setPoolResult('${m.matchId}','ga',this.value)`, `setPoolResult('${m.matchId}','gb',this.value)`, !isScorer())}
+      <div style="flex:1;font-weight:600;text-align:right">${tName(m.b)}</div>
+    </div>
+  </div>`;
+}
+
+function renderPoolsRoundTabs() {
+  const el = document.getElementById('poolRoundTabs'); if (!el) return;
+  const numRounds = Math.max(0, ...ST.poolSchedule.map(m => m.round)) + 1;
+  el.innerHTML = Array.from({ length: numRounds }, (_, r) => {
+    const done = ST.poolSchedule.filter(m => m.round === r).every(m => { const rr = getPoolResult(m.matchId); return rr.ga !== '' && rr.gb !== ''; });
+    return `<button class="rtab ${ST.activePoolRound === r ? 'rtab-active' : ''}" onclick="setPoolRound(${r})">Tour ${r + 1} ${done ? '✓' : ''}</button>`;
+  }).join('');
+}
+
+window.setPoolRound = async function(r) {
+  ST.activePoolRound = r;
+  if (isAdmin()) await saveTournament({ activePoolRound: r });
+  renderPoolsView();
+};
+
+function renderPoolsView() {
+  renderPoolsRoundTabs();
+  const el = document.getElementById('poolMatchListEl'); if (!el) return;
+  const matches = ST.poolSchedule.filter(m => m.round === ST.activePoolRound).sort((a, b) => a.court - b.court);
+  el.innerHTML = matches.map(poolMatchCardHTML).join('') || '<div class="info info-b">Aucun match pour ce tour.</div>';
+  renderPoolStandingsPanel();
+}
+
+function renderPoolStandingsPanel() {
+  const el = document.getElementById('poolStandingsPanel'); if (!el) return;
+  updateBuildBracketsBtn();
+  el.innerHTML = `<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">` +
+    ST.groups.map(g => {
+      const st = computeGroupStandings(g.id);
+      return `<div style="background:var(--s1);border:1px solid var(--bdr);border-radius:8px;padding:8px 10px;overflow-x:auto">
+        <div style="font-family:'Oswald',sans-serif;font-weight:700;color:var(--brand);margin-bottom:4px">Groupe ${g.id.slice(1)}</div>
+        <table style="width:100%;border-collapse:collapse;font-size:12px">
+          <thead><tr style="color:var(--muted)"><th style="text-align:left">#</th><th style="text-align:left">Équipe</th><th>V</th><th>Pts</th><th>+/-</th></tr></thead>
+          <tbody>${st.map((s, i) => `<tr style="${i < 2 ? 'background:var(--grn-bg)' : ''}">
+            <td>${i + 1}</td><td>${tName(s.id)}</td><td style="text-align:center">${s.w}</td>
+            <td style="text-align:center;font-weight:700">${s.pts}</td>
+            <td style="text-align:center">${s.diff > 0 ? '+' : ''}${s.diff}</td>
+          </tr>`).join('')}</tbody>
+        </table>
+      </div>`;
+    }).join('') + `</div>`;
+}
+
+function placeStakesBadgeHTML(stakes) {
+  if (stakes.isFinal) {
+    const txt = stakes.lo === stakes.hi ? `Place ${stakes.lo}` : `Places ${stakes.lo}-${stakes.hi}`;
+    return `<span style="font-weight:700;color:var(--brand)">🎯 ${txt}</span>`;
+  }
+  return `<span style="font-weight:600">🎯 Gagnant → places 1-${stakes.winnerHi} · Perdant → places ${stakes.loserLo}-${stakes.loserHi}</span>`;
+}
+
+function nodeMatchCardHTML(bracket, node, path, round, idx) {
+  const { a, b } = nodeMatchTeams(bracket, node, path, round, idx);
+  const isCons = path.length > 0;
+  const pathStr = path.join('-');
+  const roundLabel = bracketRoundName(node.depth, round);
+  const titlePrefix = isCons ? '🥈 ' : '';
+  const stakes = nodePlaceStakes(bracket, node, path, round);
+  const stakesLine = `<div style="font-size:11px;margin-top:4px">${placeStakesBadgeHTML(stakes)}</div>`;
+  if ((a == null) !== (b == null)) {
+    const winner = a ?? b;
+    return `<div style="background:var(--ylw-bg);border:1px dashed var(--ylw);border-radius:10px;padding:10px 14px;margin-bottom:8px">
+      <div style="font-size:11px;color:var(--muted)">${titlePrefix}${roundLabel} · Match ${idx + 1}</div>
+      <div style="font-weight:700;margin-top:4px">🟡 ${tName(winner)} qualifié(e) directement (exempt)</div>
+      ${stakesLine}
+    </div>`;
+  }
+  if (a == null && b == null) return '';
+  const r = nodeResultOf(bracket, path, round, idx);
+  const done = r.ga !== '' && r.gb !== '';
+  const ecartOk = done && Math.abs(+r.ga - +r.gb) >= ST.cfg.ecart;
+  const warn = done && !ecartOk ? `<span style="color:var(--ylw);font-size:11px"> ⚠ écart < ${ST.cfg.ecart} pts</span>` : '';
+  const setA = `setNodeResult('${bracket}','${pathStr}',${round},${idx},'ga',this.value)`;
+  const setB = `setNodeResult('${bracket}','${pathStr}',${round},${idx},'gb',this.value)`;
+  return `<div style="background:var(--s1);border:1px solid ${isCons ? 'var(--brand2)' : (done ? (ecartOk ? 'var(--grn)' : 'var(--ylw)') : 'var(--bdr)')};border-radius:10px;padding:10px 14px;margin-bottom:8px">
+    <div style="font-size:11px;color:${isCons ? 'var(--brand2)' : 'var(--muted)'};display:flex;justify-content:space-between">${titlePrefix}${roundLabel} · Match ${idx + 1}${warn}</div>
+    <div style="display:flex;align-items:center;gap:10px;margin-top:6px">
+      <div style="flex:1;font-weight:600">${tName(a)}</div>
+      ${scoreInputHTML(r.ga, r.gb, setA, setB, !isScorer())}
+      <div style="flex:1;font-weight:600;text-align:right">${tName(b)}</div>
+    </div>
+    ${stakesLine}
+  </div>`;
+}
+
+function renderBracketRoundTabs(bracket) {
+  const el = document.getElementById('bracketRoundTabs_' + bracket); if (!el) return;
+  const br = ST.brackets[bracket]; if (!br) { el.innerHTML = ''; return; }
+  if (br.depth === 0) { el.innerHTML = '<div class="info info-b">Une seule équipe dans ce tableau.</div>'; return; }
+  const rounds = collectGlobalRoundMatches(bracket);
+  const times = computeBracketRoundTimes();
+  let html = '';
+  for (let g = 0; g < br.depth; g++) {
+    const matches = rounds[g] || [];
+    const done = matches.length > 0 && matches.every(m => isMatchDone(bracket, m.node, m.path, m.round, m.idx));
+    const t = times[g] ? ` · ${times[g]}` : '';
+    html += `<button class="rtab ${ST.activeBracketRound[bracket] === g ? 'rtab-active' : ''}" onclick="setBracketRound('${bracket}',${g})">Tour ${g + 1}${t} ${done ? '✓' : ''}</button>`;
+  }
+  el.innerHTML = html;
+}
+
+window.setBracketRound = async function(bracket, rd) {
+  ST.activeBracketRound[bracket] = rd;
+  if (isAdmin()) await saveTournament({ activeBracketRound: ST.activeBracketRound });
+  renderBracketsView();
+};
+
+function renderBracketColumn(bracket, title) {
+  const br = ST.brackets[bracket];
+  const el = document.getElementById('bracketCol_' + bracket); if (!el) return;
+  if (!br || !br.teamCount) { el.innerHTML = `<div class="info info-b">Aucune équipe dans ce tableau.</div>`; return; }
+  renderBracketRoundTabs(bracket);
+  let body = '';
+  if (br.depth === 0) {
+    body = `<div class="info info-g">🏆 ${tName(br.autoWinner)} — championne automatique du tableau ${title}.</div>`;
+  } else {
+    const g = Math.min(Math.max(0, ST.activeBracketRound[bracket] || 0), br.depth - 1);
+    const rounds = collectGlobalRoundMatches(bracket);
+    const matches = (rounds[g] || []).slice().sort((m1, m2) => computeAbsolutePlaceOffset(bracket, m2.path) - computeAbsolutePlaceOffset(bracket, m1.path) || (m1.idx - m2.idx));
+    const times = computeBracketRoundTimes();
+    const betweenPausesList = (Array.isArray(ST.cfg.pauses) ? ST.cfg.pauses : []).filter(p => p.mode === 'betweenPhases' && (+p.min || 0) > 0);
+    const lunchNote = (g === 0 && betweenPausesList.length) ? ` — ${betweenPausesList.map(p => `${p.label || 'pause'} de ${p.min} min`).join(', ')} incluse(s)` : '';
+    const timeBanner = times[g] ? `<div class="info info-b" style="margin-bottom:8px">🕒 Ce tour est prévu vers <strong>${times[g]}</strong>${lunchNote} (horaire estimatif, selon l'avancement réel)</div>` : '';
+    if (!matches.length) body = timeBanner + '<div class="info info-b">Aucun match à ce tour pour le moment (en attente des résultats du tour précédent).</div>';
+    else body = timeBanner + matches.map(m => nodeMatchCardHTML(bracket, m.node, m.path, m.round, m.idx)).join('');
+  }
+  const listEl = document.getElementById('bracketMatchList_' + bracket);
+  if (listEl) listEl.innerHTML = body || '<div class="info info-b">Rien à afficher.</div>';
+}
+
+function renderBracketsView() { renderBracketColumn('P', 'Principale'); renderBracketColumn('C', 'Consolante'); }
+
+window.setPage4View = function(v) {
+  ST.page4View = v;
+  renderTournamentPage();
+};
+
+function renderTournamentPage() {
+  const poolsEl = document.getElementById('poolsView'), bracketsEl = document.getElementById('bracketsView');
+  const tabsEl = document.getElementById('page4Tabs');
+  const hasBrackets = ST.phase === 'bracket' || ST.phase === 'done';
+  if (tabsEl) tabsEl.style.display = hasBrackets ? 'flex' : 'none';
+  const view = hasBrackets ? (ST.page4View || 'bracket') : 'pools';
+  const tabPools = document.getElementById('tabPoolsBtn'), tabBrackets = document.getElementById('tabBracketsBtn');
+  if (tabPools) tabPools.className = 'btn btn-sm ' + (view === 'pools' ? 'btn-b' : 'btn-ghost');
+  if (tabBrackets) tabBrackets.className = 'btn btn-sm ' + (view === 'bracket' ? 'btn-b' : 'btn-ghost');
+  if (view === 'pools') {
+    if (poolsEl) poolsEl.style.display = '';
+    if (bracketsEl) bracketsEl.style.display = 'none';
+    renderPoolsView();
+  } else {
+    if (poolsEl) poolsEl.style.display = 'none';
+    if (bracketsEl) bracketsEl.style.display = '';
+    renderBracketsView();
+  }
+  const btnFin = document.getElementById('btnGoFinal');
+  if (btnFin) btnFin.style.display = (ST.phase === 'bracket' && view === 'bracket') ? '' : 'none';
+}
+
+// ═══════════════════════════════════════════════════════════
+// PAGE ÉQUIPES — vue spectateur
+// ═══════════════════════════════════════════════════════════
+function renderTeamsSpecPage() {
+  const el = document.getElementById('teamsSpecListEl'); if (!el) return;
+  if (ST.groups.length) {
+    el.innerHTML = ST.groups.map(g => `<div style="background:var(--s1);border:1px solid var(--bdr);border-radius:10px;padding:12px;margin-bottom:10px">
+      <div style="font-family:'Oswald',sans-serif;font-weight:700;color:var(--brand);margin-bottom:6px">Groupe ${g.id.slice(1)}</div>
+      ${g.teamIds.map(id => { const t = tObj(id); return `<div style="padding:4px 0;border-top:1px solid var(--s3)"><strong>${t?.name}</strong><div style="font-size:11px;color:var(--muted)">${t?.club || ''}</div></div>`; }).join('')}
+    </div>`).join('');
+  } else {
+    el.innerHTML = ST.teams.map(t => `<div style="background:var(--s1);border:1px solid var(--bdr);border-radius:10px;padding:10px 14px;margin-bottom:6px">
+      <strong>${t.name}</strong><div style="font-size:11px;color:var(--muted)">${t.club || ''}</div>
+    </div>`).join('') || '<div class="info info-b">Aucune équipe enregistrée.</div>';
+  }
+}
+
+// ═══════════════════════════════════════════════════════════
+// INSCRIPTION PUBLIQUE
+// ═══════════════════════════════════════════════════════════
+function registrationCap() { return ST.registrationMax != null ? ST.registrationMax : ST.cfg.n; }
+
+function renderRegisterPage() {
+  const el = document.getElementById('regPageBody'); if (!el) return;
+  if (!ST.registrationOpen) {
+    el.innerHTML = `<div class="info info-b">🔒 Les inscriptions ne sont pas ouvertes pour le moment. Revenez plus tard ou contactez l'organisateur.</div>`;
+    ST.regSubmitted = false;
+    return;
+  }
+  const cap = registrationCap();
+  const used = ST.registrationCount || 0;
+  const full = used >= cap;
+  if (full && !ST.regSubmitted) {
+    el.innerHTML = `<div class="info info-b">🚫 Les inscriptions en ligne sont complètes (${used}/${cap} équipes). Contactez l'organisateur si vous souhaitez être ajouté(e) en liste d'attente.</div>`;
+    return;
+  }
+  if (ST.regSubmitted) {
+    el.innerHTML = `<div class="info info-g">✅ Votre inscription a bien été prise en compte !<br>Elle est en cours de validation par l'organisateur : si elle est acceptée, votre équipe apparaîtra dans la liste des équipes engagées. Si elle ne peut pas être acceptée (places complètes, doublon…), vous en serez avisé(e) très rapidement au numéro ou à l'email indiqué.</div>
+      <button class="btn btn-ghost btn-sm" style="margin-top:10px" onclick="resetRegistrationForm()">📝 Inscrire une autre équipe</button>`;
+    return;
+  }
+  el.innerHTML = `<div class="info info-b" style="margin-bottom:10px">${used}/${cap} équipes inscrites en ligne</div>
+  <div class="card">
+    <label>Joueur 1 *</label><input type="text" id="regP1" style="margin-bottom:10px" placeholder="Prénom Nom">
+    <label>Joueur 2 *</label><input type="text" id="regP2" style="margin-bottom:10px" placeholder="Prénom Nom">
+    <label>Club</label><input type="text" id="regClub" style="margin-bottom:10px" placeholder="Nom du club">
+    <label>Téléphone</label><input type="tel" id="regTel" style="margin-bottom:10px" placeholder="06 12 34 56 78">
+    <label>Email</label><input type="email" id="regEmail" style="margin-bottom:14px" placeholder="email@exemple.com">
+    <button class="btn btn-b" style="width:100%" onclick="submitRegistration()">Envoyer l'inscription</button>
+    <div id="regMsg" style="margin-top:8px;font-size:13px"></div>
+  </div>`;
+}
+
+window.resetRegistrationForm = function() { ST.regSubmitted = false; renderRegisterPage(); };
+
+window.submitRegistration = async function() {
+  if ((ST.registrationCount || 0) >= registrationCap()) { renderRegisterPage(); return; }
+  const p1 = document.getElementById('regP1').value.trim();
+  const p2 = document.getElementById('regP2').value.trim();
+  const club = document.getElementById('regClub').value.trim();
+  const tel = document.getElementById('regTel').value.trim();
+  const email = document.getElementById('regEmail').value.trim();
+  const msgEl = document.getElementById('regMsg');
+  if (!p1 || !p2) { if (msgEl) { msgEl.textContent = 'Les deux noms de joueurs sont requis.'; msgEl.style.color = 'var(--red)'; } return; }
+  try {
+    const ref = doc(collection(db, 'petanque_registrations'));
+    await setDoc(ref, { p1, p2, club, tel, email, status: 'pending', createdAt: Date.now() });
+    await setDoc(doc(db, 'petanque', 'status'), { registrationCount: increment(1) }, { merge: true });
+    ST.regSubmitted = true;
+    renderRegisterPage();
+  } catch (e) {
+    console.error('submitRegistration', e);
+    if (msgEl) { msgEl.textContent = "Erreur d'envoi : " + e.message; msgEl.style.color = 'var(--red)'; }
+  }
+};
+
+// ═══════════════════════════════════════════════════════════
+// ADMIN — Live / Comptes staff / Gestion rôles
+// ═══════════════════════════════════════════════════════════
+window.toggleLiveOpen = async function() {
+  if (!isAdmin()) return;
+  ST.liveOpen = !ST.liveOpen;
+  await saveTournament({ liveOpen: ST.liveOpen });
+  await setDoc(doc(db, 'petanque', 'status'), { liveOpen: ST.liveOpen }, { merge: true });
+  updateLiveToggleBtn();
+};
+
+function updateLiveToggleBtn() {
+  const btn = document.getElementById('liveToggleBtn'); if (!btn) return;
+  if (ST.liveOpen) { btn.textContent = '🟢 Live ouvert (spectateurs)'; btn.style.background = 'var(--grn)'; btn.style.borderColor = 'var(--grn)'; btn.style.color = '#fff'; }
+  else             { btn.textContent = '🔴 Live fermé (spectateurs)'; btn.style.background = 'var(--s1)'; btn.style.borderColor = 'var(--red)'; btn.style.color = 'var(--red)'; }
+}
+
+window.toggleRegistrationOpen = async function() {
+  if (!isAdmin()) return;
+  ST.registrationOpen = !ST.registrationOpen;
+  await saveTournament({ registrationOpen: ST.registrationOpen });
+  await setDoc(doc(db, 'petanque', 'status'), { registrationOpen: ST.registrationOpen }, { merge: true });
+  updateRegistrationToggleBtn();
+  updateRegistrationUI();
+};
+
+window.saveRegistrationMax = async function() {
+  if (!isAdmin()) return;
+  const el = document.getElementById('registrationMaxInput'); if (!el) return;
+  const v = el.value.trim();
+  ST.registrationMax = v === '' ? null : Math.max(0, +v);
+  await saveTournament({ registrationMax: ST.registrationMax });
+};
+
+function updateRegistrationToggleBtn() {
+  const btn = document.getElementById('registrationToggleBtn'); if (!btn) return;
+  if (ST.registrationOpen) { btn.textContent = '🟢 Inscriptions ouvertes (public)'; btn.style.background = 'var(--grn)'; btn.style.borderColor = 'var(--grn)'; btn.style.color = '#fff'; }
+  else                     { btn.textContent = '🔴 Inscriptions fermées (public)'; btn.style.background = 'var(--s1)'; btn.style.borderColor = 'var(--red)'; btn.style.color = 'var(--red)'; }
+  const maxEl = document.getElementById('registrationMaxInput');
+  if (maxEl && document.activeElement !== maxEl) maxEl.value = ST.registrationMax != null ? ST.registrationMax : '';
+}
+
+function subscribeToRegistrations() {
+  onSnapshot(collection(db, 'petanque_registrations'), snap => {
+    ST.registrations = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => r.status !== 'accepted' && r.status !== 'rejected');
+    renderRegistrationsPanel();
+  }, e => console.warn('subscribeToRegistrations', e));
+}
+
+function renderRegistrationsPanel() {
+  const el = document.getElementById('registrationsListEl'); if (!el) return;
+  const badge = document.getElementById('registrationsCount');
+  if (badge) badge.textContent = ST.registrations.length ? String(ST.registrations.length) : '';
+  if (!ST.registrations.length) { el.innerHTML = '<div class="info info-b">Aucune inscription en attente.</div>'; return; }
+  el.innerHTML = ST.registrations.map(r => `
+    <div style="display:flex;align-items:center;gap:10px;background:var(--s1);border:1px solid var(--bdr);border-radius:10px;padding:10px 14px;margin-bottom:6px;flex-wrap:wrap">
+      <div style="flex:1;min-width:180px">
+        <div style="font-weight:700">${r.p1} / ${r.p2}</div>
+        <div style="font-size:12px;color:var(--muted)">${r.club || 'Sans club'}${r.tel ? ' · 📞 ' + r.tel : ''}${r.email ? ' · ✉️ ' + r.email : ''}</div>
+      </div>
+      <button class="btn btn-b btn-xs" onclick="acceptRegistration('${r.id}')">✓ Valider</button>
+      <button class="btn btn-ghost btn-xs" onclick="rejectRegistration('${r.id}')" style="color:var(--red)">✕ Refuser</button>
+    </div>`).join('');
+}
+
+window.acceptRegistration = async function(id) {
+  if (!isAdmin()) return;
+  const r = ST.registrations.find(x => x.id === id); if (!r) return;
+  if (ST.teams.length >= ST.cfg.n) { alert("Le nombre d'équipes maximum (" + ST.cfg.n + ") est déjà atteint. Augmentez-le en page Config ou refusez d'autres inscriptions avant de valider celle-ci."); return; }
+  const name = r.p1 + ' / ' + r.p2;
+  ST.teams.push({ id: 't' + Date.now() + Math.floor(Math.random() * 1000), p1: r.p1, p2: r.p2, club: r.club || '', lv: 3, name });
+  await saveTournament({ teams: ST.teams });
+  await setDoc(doc(db, 'petanque_registrations', id), { status: 'accepted' }, { merge: true });
+  renderTeamsPage();
+};
+
+window.rejectRegistration = async function(id) {
+  if (!isAdmin()) return;
+  const r = ST.registrations.find(x => x.id === id);
+  const contact = r ? [r.tel, r.email].filter(Boolean).join(' / ') : '';
+  const warn = contact ? `\n\nPensez à prévenir l'équipe (${contact}) puisqu'elle a été informée qu'elle serait avisée rapidement en cas de refus.` : '';
+  if (!confirm('Refuser cette inscription ?' + warn)) return;
+  await setDoc(doc(db, 'petanque_registrations', id), { status: 'rejected' }, { merge: true });
+  await setDoc(doc(db, 'petanque', 'status'), { registrationCount: increment(-1) }, { merge: true });
+};
+
+window.toggleAdminPanel = function() {
+  const el = document.getElementById('adminPanel');
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+  if (el.style.display === 'block') loadUserList();
+};
+
+window.adminCreateUser = async function() {
+  const email = document.getElementById('newUserEmail').value.trim();
+  const pass  = document.getElementById('newUserPass').value;
+  const role  = document.getElementById('newUserRole').value;
+  if (!email || !pass) { alert('Email et mot de passe requis.'); return; }
+  try {
+    const cred = await createUserWithEmailAndPassword(secondaryAuth, email, pass);
+    await setDoc(doc(db, 'users', cred.user.uid), { email, role });
+    await signOut(secondaryAuth);
+    document.getElementById('newUserEmail').value = '';
+    document.getElementById('newUserPass').value = '';
+    loadUserList();
+    alert('✅ Compte créé : ' + email + ' (' + role + ')');
+  } catch (e) { alert('Erreur : ' + e.message); }
+};
+
+window.loadUserList = async function() {
+  const el = document.getElementById('userListEl'); if (!el) return;
+  try {
+    const snap = await getDocs(collection(db, 'users'));
+    el.innerHTML = snap.docs.map(d => {
+      const u = d.data();
+      const roleColor = u.role === 'admin' ? 'var(--brand)' : u.role === 'scorer' ? 'var(--blu)' : 'var(--muted)';
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 10px;background:var(--s1);border:1px solid var(--bdr);border-radius:6px;margin-bottom:4px">
+        <div>
+          <span style="font-size:13px">${u.email}</span>
+          <span style="color:${roleColor};font-size:11px;font-weight:700;margin-left:8px">${u.role === 'admin' ? '👑' : u.role === 'scorer' ? '🎯' : '👁'} ${u.role}</span>
+        </div>
+        <div style="display:flex;gap:6px">
+          <select style="padding:4px 6px;font-size:11px;border-radius:6px;border:1px solid var(--bdr)" onchange="changeUserRole('${d.id}',this.value)">
+            <option value="scorer" ${u.role==='scorer'?'selected':''}>Scorer</option>
+            <option value="admin"  ${u.role==='admin'?'selected':''}>Admin</option>
+          </select>
+          <button class="btn btn-ghost btn-xs" onclick="deleteUserFromList('${d.id}')" style="color:var(--red)">🗑️</button>
+        </div>
+      </div>`;
+    }).join('') || '<div class="info info-b">Aucun compte staff créé.</div>';
+  } catch (e) { document.getElementById('userListEl').innerHTML = '<div class="info info-y">Lecture impossible.</div>'; }
+};
+
+window.changeUserRole = async function(uid, role) {
+  try { await updateDoc(doc(db, 'users', uid), { role }); loadUserList(); }
+  catch (e) { alert('Erreur : ' + e.message); }
+};
+
+window.deleteUserFromList = async function(uid) {
+  if (!confirm('Retirer ce compte des rôles (devient spectateur) ?')) return;
+  await deleteDoc(doc(db, 'users', uid)); loadUserList();
+};
+
+window.newTournament = async function() {
+  if (!isAdmin()) return;
+  if (!confirm('⚠️ Repartir de zéro ? Tout sera effacé.')) return;
+  ST.teams = []; ST.groups = []; ST.poolSchedule = []; ST.brackets = { P: null, C: null }; ST.results = {};
+  ST.phase = 'config'; ST.activePoolRound = 0; ST.activeBracketRound = { P: 0, C: 0 };
+  await saveTournament({ teams: [], groups: [], poolSchedule: [], brackets: { P: null, C: null }, phase: 'config', activePoolRound: 0, activeBracketRound: { P: 0, C: 0 }, liveOpen: false, registrationOpen: false, registrationMax: null });
+  await setDoc(doc(db, 'petanque', 'status'), { liveOpen: false, registrationOpen: false, registrationCount: 0 }, { merge: true });
+  try { const snap = await getDocs(collection(db, 'petanque_results')); await Promise.all(snap.docs.map(d => deleteDoc(doc(db, 'petanque_results', d.id)))); } catch (e) {}
+  try { const snap = await getDocs(collection(db, 'petanque_registrations')); await Promise.all(snap.docs.map(d => deleteDoc(doc(db, 'petanque_registrations', d.id)))); } catch (e) {}
+  goTo(1);
+};
+
+window.resetAllScores = async function() {
+  if (!isAdmin()) return;
+  if (!confirm('⚠️ Effacer tous les scores saisis ?')) return;
+  ST.results = {};
+  try { const snap = await getDocs(collection(db, 'petanque_results')); await Promise.all(snap.docs.map(d => deleteDoc(doc(db, 'petanque_results', d.id)))); } catch (e) {}
+  refreshCurrentPage();
+};
+
+window.reloadApp = function() { location.reload(); };
+
+window.goToLive = function() { goTo(4); closeMobileMenu(); };
+
+window.toggleMobileMenu = function() { document.getElementById('mobileDrawer').classList.toggle('open'); document.getElementById('menuOverlay').classList.toggle('open'); };
+
+window.closeMobileMenu = function() { document.getElementById('mobileDrawer').classList.remove('open'); document.getElementById('menuOverlay').classList.remove('open'); };
+
+function syncDrawerButtons() {
+  [['liveBtn','drawerLiveBtn'],['tvBtn','drawerTvBtn'],['adminBtn','drawerAdminBtn'],['backBtn','drawerBackBtn'],['fwdBtn','drawerFwdBtn'],['logoutBtn','drawerLogoutBtn']].forEach(([deskId, drawId]) => {
+    const d = document.getElementById(deskId), w = document.getElementById(drawId);
+    if (d && w) w.style.display = d.style.display;
+  });
+}
+
+window.addEventListener('resize', () => { if (window.innerWidth > 767) closeMobileMenu(); });
+
+window.printPlanning = function() {
+  let body = `<h2>${ST.cfg.name}</h2><p>Score : ${ST.cfg.scoreMax} pts · Écart minimum : ${ST.cfg.ecart} pts</p><h3>Planning Phase 1</h3>`;
+  const numRounds = Math.max(0, ...ST.poolSchedule.map(m => m.round)) + 1;
+  for (let r = 0; r < numRounds; r++) {
+    body += `<h4>Tour ${r + 1}</h4><table border="1" cellpadding="6" style="border-collapse:collapse;width:100%"><tr><th>Groupe</th><th>Terrain</th><th>Heure</th><th>Équipe A</th><th>Équipe B</th></tr>`;
+    ST.poolSchedule.filter(m => m.round === r).forEach(m => { body += `<tr><td>${m.group}</td><td>${m.court}</td><td>${m.time}</td><td>${tName(m.a)}</td><td>${tName(m.b)}</td></tr>`; });
+    body += '</table>';
+  }
+  const win = window.open('', '_blank');
+  win.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Planning</title><style>body{margin:16px;font-family:sans-serif;font-size:12px}</style></head><body>' + body + '<div style="margin-top:20px"><button onclick="window.print()">Imprimer</button></div></body></html>');
+  win.document.close();
+};
+
+// ═══════════════════════════════════════════════════════════
+// MODE ÉCRAN TV
+// ═══════════════════════════════════════════════════════════
+function getTVSettings() {
+  let saved = {}; try { saved = JSON.parse(localStorage.getItem('tvSettings_pet') || '{}'); } catch (e) {}
+  return { mode: saved.mode || 'cycle', intervalMatches: saved.intervalMatches || 12, intervalStandings: saved.intervalStandings || 20, hidden: saved.hidden || false, scroll: (saved.scroll === undefined) ? true : saved.scroll };
+}
+
+function saveTVSettings(patch) { const next = { ...getTVSettings(), ...patch }; try { localStorage.setItem('tvSettings_pet', JSON.stringify(next)); } catch (e) {} return next; }
+
+function startTVCycle() {
+  stopTVCycle(); tvScreenIndex = 0; tvLastRenderedKey = null;
+  tvClockIv = setInterval(updateTVClock, 1000); updateTVClock();
+}
+
+function stopTVCycle() { if (tvCycleIv) { clearTimeout(tvCycleIv); tvCycleIv = null; } if (tvClockIv) { clearInterval(tvClockIv); tvClockIv = null; } stopTVAutoScroll(); }
+
+function scheduleTVAdvance() {
+  if (tvCycleIv) { clearTimeout(tvCycleIv); tvCycleIv = null; }
+  const screens = getActiveTVScreens(); if (screens.length <= 1) return;
+  const current = screens[Math.min(tvScreenIndex, screens.length - 1)];
+  const cfg = getTVSettings();
+  const sec = (current && current.kind === 'standings') ? Math.max(5, +cfg.intervalStandings || 20) : Math.max(5, +cfg.intervalMatches || 12);
+  tvCycleIv = setTimeout(() => { const s2 = getActiveTVScreens(); if (s2.length > 1) tvScreenIndex = (tvScreenIndex + 1) % s2.length; renderTVContent(); }, sec * 1000);
+}
+
+function updateTVClock() { const el = document.getElementById('tvClock'); if (el) el.textContent = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
+
+let tvScrollState = { phase: 'pausedTop', since: 0 };
+
+function startTVAutoScroll() {
+  stopTVAutoScroll();
+  const el = document.getElementById('tvContent'); if (!el) return;
+  const maxInit = el.scrollHeight - el.clientHeight;
+  let startPos = 0;
+  if (maxInit > 6) { const live = el.querySelector('.tv-match-live'); if (live) { const er = el.getBoundingClientRect(), lr = live.getBoundingClientRect(); startPos = Math.max(0, Math.min((lr.top - er.top) + el.scrollTop - 16, maxInit)); } }
+  el.scrollTop = startPos;
+  tvScrollState = { phase: 'pausedTop', since: Date.now() };
+  if (getTVSettings().scroll === false) return;
+  const SPEED = 0.7, PAUSE = 2500;
+  tvScrollIv = setInterval(() => {
+    if (!el.isConnected) return;
+    const maxS = el.scrollHeight - el.clientHeight; if (maxS <= 6) return;
+    const now = Date.now();
+    if (tvScrollState.phase === 'pausedTop')   { if (now - tvScrollState.since >= PAUSE) tvScrollState = { phase: 'scrollingDown', since: now }; return; }
+    if (tvScrollState.phase === 'pausedBottom') { if (now - tvScrollState.since >= PAUSE) { el.scrollTop = 0; tvScrollState = { phase: 'pausedTop', since: now }; } return; }
+    el.scrollTop += SPEED;
+    if (el.scrollTop >= maxS - 1) { el.scrollTop = maxS; tvScrollState = { phase: 'pausedBottom', since: now }; }
+  }, 30);
+}
+
+function stopTVAutoScroll() { if (tvScrollIv) { clearInterval(tvScrollIv); tvScrollIv = null; } }
+
+function renderTVPage() { renderTVSettingsUI(); renderTVContent(); }
+
+function renderTVSettingsUI() {
+  const cfg = getTVSettings();
+  const bar = document.getElementById('tvControlBar'); if (bar) bar.style.display = cfg.hidden ? 'none' : 'flex';
+  const tab = document.getElementById('tvShowTab'); if (tab) tab.style.display = cfg.hidden ? 'flex' : 'none';
+  const modeSel = document.getElementById('tvModeSelect'); if (modeSel) modeSel.value = cfg.mode;
+  const ivmW = document.getElementById('tvIntervalMatchesWrap'); if (ivmW) ivmW.style.display = cfg.mode === 'standings' ? 'none' : '';
+  const ivsW = document.getElementById('tvIntervalStandingsWrap'); if (ivsW) ivsW.style.display = cfg.mode === 'results' ? 'none' : '';
+  const ivmI = document.getElementById('tvIntervalMatchesInput'); if (ivmI) ivmI.value = cfg.intervalMatches;
+  const ivsI = document.getElementById('tvIntervalStandingsInput'); if (ivsI) ivsI.value = cfg.intervalStandings;
+  const sc = document.getElementById('tvScrollToggle'); if (sc) sc.checked = cfg.scroll;
+}
+
+window.tvSetMode = v => { saveTVSettings({ mode: v }); startTVCycle(); renderTVPage(); };
+window.tvSetIntervalMatches = v => { saveTVSettings({ intervalMatches: Math.max(5, +v || 12) }); scheduleTVAdvance(); };
+window.tvSetIntervalStandings = v => { saveTVSettings({ intervalStandings: Math.max(5, +v || 20) }); scheduleTVAdvance(); };
+window.tvSetScroll = v => { saveTVSettings({ scroll: !!v }); startTVAutoScroll(); };
+window.tvToggleHidden = () => { saveTVSettings({ hidden: !getTVSettings().hidden }); renderTVSettingsUI(); };
+window.tvToggleFullscreen = () => { if (!document.fullscreenElement) document.documentElement.requestFullscreen().catch(() => {}); else document.exitFullscreen().catch(() => {}); };
+window.tvExit = () => { stopTVCycle(); if (USER_ROLE === 'spectator' || USER_ROLE === null) spectatorGoLive(4); else goTo(4); };
+
+function tvMatchRowHTML(m) {
+  const aName = m.aId ? tName(m.aId) : '<em>Exempt</em>', bName = m.bId ? tName(m.bId) : '<em>Exempt</em>';
+  const score = m.done ? `${m.r.ga} – ${m.r.gb}` : '–';
+  return `<div class="tv-match-row ${m.isLive ? 'tv-match-live' : ''}">
+    <div class="tv-match-meta"><span>${m.label}</span><span class="tv-match-time">${m.time || ''}</span></div>
+    <div class="tv-match-teams"><span class="tv-team">${aName}</span><span class="tv-score">${score}</span><span class="tv-team tv-team-r">${bName}</span></div>
+  </div>`;
+}
+
+function tvMatchGridHTML(matches) {
+  if (!matches.length) return '<div class="tv-empty">Aucun match à afficher.</div>';
+  return `<div class="tv-match-grid">${matches.map(m => tvMatchRowHTML(m)).join('')}</div>`;
+}
+
+function tvStandingsPoolsHTML() {
+  return `<div class="tv-pools-grid">` + ST.groups.map(g => {
+    const st = computeGroupStandings(g.id);
+    return `<div class="tv-pool-card" style="border-color:var(--brand)">
+      <div class="tv-pool-ttl" style="background:var(--brand)">Groupe ${g.id.slice(1)}</div>
+      <table class="tv-stbl"><thead><tr><th>#</th><th>Équipe</th><th>V</th><th>Pts</th><th>+/-</th></tr></thead>
+      <tbody>${st.map((s, i) => `<tr class="${i < 2 ? 'tv-row-top' : ''}"><td>${i + 1}</td><td class="tv-team-name">${tName(s.id)}</td><td>${s.w}</td><td class="tv-pts">${s.pts}</td><td>${s.diff > 0 ? '+' : ''}${s.diff}</td></tr>`).join('')}</tbody>
+      </table></div>`;
+  }).join('') + `</div>`;
+}
+
+function tvFinalRankingHTML() {
+  const ranking = computeFinalRanking();
+  if (!ranking.length) return '<div class="tv-empty">Le classement s\'affichera une fois la phase 2 lancée.</div>';
+  return `<table class="tv-final-tbl"><thead><tr><th>Place</th><th>Équipe</th><th>Club</th></tr></thead>
+    <tbody>${ranking.map(r => `<tr class="${r.place <= 3 ? 'tv-podium-' + r.place : ''}">
+      <td class="tv-place">${r.place === 1 ? '🥇' : r.place === 2 ? '🥈' : r.place === 3 ? '🥉' : r.place}</td>
+      <td class="tv-team-name">${tName(r.teamId)}</td>
+      <td style="font-size:.7em;color:rgba(255,255,255,.6)">${tClub(r.teamId)}</td>
+    </tr>`).join('')}</tbody>
+  </table>`;
+}
+
+const TV_PAGE_SIZE = 12;
+
+function getTVScreens() {
+  const screens = [];
+  if (ST.phase === 'pools' || ST.phase === 'config') {
+    const flat = ST.poolSchedule.map(m => { const r = getPoolResult(m.matchId); return { label: 'Groupe ' + m.group.slice(1) + ' · T' + m.court, time: m.time, aId: m.a, bId: m.b, r, done: (r.ga !== '' && r.gb !== ''), isLive: ST.poolSchedule.find(pm => pm.a === m.a && pm.b === m.b)?.round === ST.activePoolRound }; });
+    screens.push({ key: 'pool-results', kind: 'matches', title: '🎯 Matchs de Poules', render: () => tvMatchGridHTML(flat) });
+    screens.push({ key: 'pool-std', kind: 'standings', title: '📊 Classement des Poules', render: tvStandingsPoolsHTML });
+    return screens;
+  }
+  ['P', 'C'].forEach(bk => {
+    const br = ST.brackets[bk]; if (!br || !br.teamCount) return;
+    const label = bk === 'P' ? 'Principale' : 'Consolante';
+    if (br.depth === 0) { screens.push({ key: 'auto-' + bk, kind: 'matches', title: `🏆 ${label}`, render: () => `<div class="tv-empty">${tName(br.autoWinner)} championne automatique.</div>` }); return; }
+    const rounds = collectGlobalRoundMatches(bk);
+    let firstUnfinished = -1;
+    for (let g = 0; g < br.depth; g++) {
+      const ms = rounds[g] || [];
+      if (!ms.length) continue;
+      if (!ms.every(m => isMatchDone(bk, m.node, m.path, m.round, m.idx))) { firstUnfinished = g; break; }
+    }
+    const roundsToShow = firstUnfinished === -1 ? [br.depth - 1] : [firstUnfinished];
+    roundsToShow.forEach(g => {
+      const ms = (rounds[g] || []).slice().sort((m1, m2) => computeAbsolutePlaceOffset(bk, m2.path) - computeAbsolutePlaceOffset(bk, m1.path) || (m1.idx - m2.idx));
+      const flat = [];
+      ms.forEach(m => {
+        const { a, b } = nodeMatchTeams(bk, m.node, m.path, m.round, m.idx);
+        if (a == null && b == null) return;
+        const r = nodeResultOf(bk, m.path, m.round, m.idx);
+        const tag = m.path.length > 0 ? '🥈 Classement · ' : '';
+        const st = nodePlaceStakes(bk, m.node, m.path, m.round);
+        const placeTxt = st.isFinal ? (st.lo === st.hi ? `Place ${st.lo}` : `Places ${st.lo}-${st.hi}`) : `Perdant → ${st.loserLo}-${st.loserHi}`;
+        flat.push({ label: label + ' · ' + tag + bracketRoundName(m.node.depth, m.round) + ' · M' + (m.idx + 1) + ' · ' + placeTxt, time: '', aId: a, bId: b, r, done: (r.ga !== '' && r.gb !== '') || r.bye, isLive: g === ST.activeBracketRound[bk] });
+      });
+      const pageCount = Math.max(1, Math.ceil(flat.length / TV_PAGE_SIZE));
+      for (let i = 0; i < pageCount; i++) {
+        const page = flat.slice(i * TV_PAGE_SIZE, (i + 1) * TV_PAGE_SIZE);
+        screens.push({ key: 'br-' + bk + '-g' + g + '-' + i, kind: 'matches', title: pageCount > 1 ? `🏆 ${label} · Tour ${g + 1} (${i + 1}/${pageCount})` : `🏆 ${label} · Tour ${g + 1}`, render: () => tvMatchGridHTML(page) });
+      }
+    });
+  });
+  screens.push({ key: 'final-rank', kind: 'standings', title: '🥇 Classement Final', render: tvFinalRankingHTML });
+  return screens;
+}
+
+function getActiveTVScreens() {
+  const screens = getTVScreens(); const cfg = getTVSettings();
+  if (cfg.mode === 'results')   return screens.filter(s => s.kind === 'matches');
+  if (cfg.mode === 'standings') return screens.filter(s => s.kind === 'standings');
+  return screens;
+}
+
+function renderTVContent() {
+  const el = document.getElementById('tvContent'); if (!el) return;
+  const phaseEl = document.getElementById('tvPhaseBadge');
+  if (phaseEl) phaseEl.textContent = ST.phase === 'pools' ? '🎯 Phase 1 (Poules)' : ST.phase === 'bracket' ? '🏆 Phase 2 (Tableaux)' : ST.phase === 'config' ? '⚙️ Préparation' : '🏁 Terminé';
+  if (ST.phase !== tvLastPhase) { tvLastPhase = ST.phase; tvScreenIndex = 0; }
+  const screens = getActiveTVScreens();
+  const sig = screens.map(s => s.key).join('|');
+  if (sig !== tvLastScreensSig) { tvLastScreensSig = sig; tvScreenIndex = 0; }
+  if (tvScreenIndex >= screens.length) tvScreenIndex = 0;
+  const screen = screens[tvScreenIndex];
+  const subEl = document.getElementById('tvSubTitle');
+  const isScreenChange = !screen || screen.key !== tvLastRenderedKey;
+  tvLastRenderedKey = screen ? screen.key : null;
+  if (!screen) { if (subEl) subEl.textContent = ''; el.innerHTML = '<div class="tv-empty">Rien à afficher.</div>'; }
+  else { if (subEl) subEl.textContent = screen.title; el.innerHTML = screen.render(); }
+  if (!isScreenChange) return;
+  requestAnimationFrame(startTVAutoScroll);
+  scheduleTVAdvance();
+}
+</script>
 
 </body>
 </html>
