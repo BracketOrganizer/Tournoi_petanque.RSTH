@@ -19,8 +19,8 @@
 <script type="module">
 import { initializeApp } from "firebase/app";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged,
-         createUserWithEmailAndPassword, GoogleAuthProvider, signInWithPopup,
-         setPersistence, inMemoryPersistence } from "firebase/auth";
+         createUserWithEmailAndPassword, GoogleAuthProvider, signInWithRedirect,
+         getRedirectResult, setPersistence, inMemoryPersistence } from "firebase/auth";
 import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot,
          collection, getDocs, deleteDoc, increment } from "firebase/firestore";
 
@@ -149,13 +149,18 @@ onAuthStateChanged(auth, async (user) => {
 window.loginGoogle = async function() {
   const provider = new GoogleAuthProvider();
   try {
-    await signInWithPopup(auth, provider);
+    showAuthMsg('Redirection vers Google...', 'var(--ink2)');
+    await signInWithRedirect(auth, provider);
+    // La page quitte l'appli ici ; le retour est géré par getRedirectResult() au chargement.
   } catch (e) {
-    if (e.code !== 'auth/popup-closed-by-user' && e.code !== 'auth/cancelled-popup-request') {
-      showAuthMsg(authErrMsg(e.code), 'var(--red)');
-    }
+    showAuthMsg(authErrMsg(e.code), 'var(--red)');
   }
 };
+// Récupère le résultat de la connexion Google après le retour de redirection.
+// Doit être appelé au chargement, avant/en parallèle de onAuthStateChanged.
+getRedirectResult(auth).catch((e) => {
+  if (e && e.code) showAuthMsg(authErrMsg(e.code), 'var(--red)');
+});
 window.loginEmail = async function() {
   const email = document.getElementById('loginEmailInput').value.trim();
   const pass  = document.getElementById('loginPassInput').value;
@@ -238,7 +243,8 @@ function authErrMsg(code) {
     'auth/user-not-found': 'Aucun compte avec cet email.',
     'auth/wrong-password': 'Mot de passe incorrect.',
     'auth/invalid-credential': 'Identifiants incorrects.',
-    'auth/too-many-requests': 'Trop de tentatives, réessayez plus tard.'
+    'auth/too-many-requests': 'Trop de tentatives, réessayez plus tard.',
+    'auth/unauthorized-domain': 'Ce site n\'est pas autorisé pour la connexion Google (domaine non déclaré dans Firebase).'
   };
   return map[code] || 'Erreur de connexion (' + code + ')';
 }
