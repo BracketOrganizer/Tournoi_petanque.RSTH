@@ -20,7 +20,7 @@
 import { initializeApp } from "firebase/app";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged,
          createUserWithEmailAndPassword, GoogleAuthProvider, signInWithRedirect,
-         setPersistence, inMemoryPersistence } from "firebase/auth";
+         getRedirectResult, setPersistence, browserSessionPersistence } from "firebase/auth";
 import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot,
          collection, getDocs, deleteDoc, increment } from "firebase/firestore";
 
@@ -39,12 +39,12 @@ const firebaseConfig = {
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
 const db = getFirestore(app);
-// Aucune persistance de session : en cas de rechargement ou de réouverture de
-// l'appli (même si le navigateur garde techniquement l'onglet en mémoire), la
-// connexion admin/scoreur n'est jamais restaurée automatiquement — il faut se
-// reconnecter. Cela évite qu'un accès admin oublié ouvert ne réapparaisse plus
-// tard (par ex. si on rouvre l'appli en tant que spectateur ou scoreur).
-try { await setPersistence(auth, inMemoryPersistence); } catch (e) { console.warn('setPersistence', e); }
+// Persistance "session" : la connexion admin/scoreur survit au rechargement de
+// page (indispensable pour signInWithRedirect, qui recharge entièrement la
+// page lors de l'aller-retour vers Google), mais disparaît à la fermeture de
+// l'onglet/navigateur — elle n'est jamais "définitive". La déconnexion
+// automatique après inactivité (voir plus bas) reste par ailleurs active.
+try { await setPersistence(auth, browserSessionPersistence); } catch (e) { console.warn('setPersistence', e); }
 // Instance secondaire : permet à l'admin de créer des comptes scorer sans se déconnecter
 const secondaryApp = initializeApp(firebaseConfig, 'secondary');
 const secondaryAuth = getAuth(secondaryApp);
@@ -120,8 +120,7 @@ onAuthStateChanged(auth, async (user) => {
     try {
       const snap = await getDoc(doc(db, 'users', user.uid));
       if (snap.exists()) role = snap.data().role || 'spectator';
-      console.log('[DEBUG AUTH]', { email: user.email, uid: user.uid, docExists: snap.exists(), role });
-    } catch (e) { console.warn('lecture rôle échouée', e); console.log('[DEBUG AUTH] erreur lecture rôle', { email: user.email, uid: user.uid, error: e.code || e.message }); }
+    } catch (e) { console.warn('lecture rôle échouée', e); }
     // Sécurité supplémentaire : si une session admin/scoreur est restée inactive
     // trop longtemps (appli laissée ouverte en arrière-plan), on force la
     // déconnexion au lieu de rouvrir l'accès automatiquement.
@@ -151,19 +150,18 @@ onAuthStateChanged(auth, async (user) => {
 window.loginGoogle = async function() {
   const provider = new GoogleAuthProvider();
   try {
-    // signInWithRedirect au lieu de signInWithPopup : évite le blocage
-    // "Cross-Origin-Opener-Policy would block the window.closed call"
-    // que GitHub Pages déclenche avec les popups (impossible de personnaliser
-    // les en-têtes HTTP sur GitHub Pages, donc on contourne via une redirection).
+    showAuthMsg('Redirection vers Google...', 'var(--ink2)');
     await signInWithRedirect(auth, provider);
-    // Après la redirection, la page se recharge et onAuthStateChanged (déjà
-    // en place plus bas) détecte automatiquement la connexion réussie.
+    // La page quitte l'appli ici ; le retour est géré par getRedirectResult() au chargement.
   } catch (e) {
-    if (e.code !== 'auth/popup-closed-by-user' && e.code !== 'auth/cancelled-popup-request') {
-      showAuthMsg(authErrMsg(e.code), 'var(--red)');
-    }
+    showAuthMsg(authErrMsg(e.code), 'var(--red)');
   }
 };
+// Récupère le résultat de la connexion Google après le retour de redirection.
+// Doit être appelé au chargement, avant/en parallèle de onAuthStateChanged.
+getRedirectResult(auth).catch((e) => {
+  if (e && e.code) showAuthMsg(authErrMsg(e.code), 'var(--red)');
+});
 window.loginEmail = async function() {
   const email = document.getElementById('loginEmailInput').value.trim();
   const pass  = document.getElementById('loginPassInput').value;
@@ -246,7 +244,8 @@ function authErrMsg(code) {
     'auth/user-not-found': 'Aucun compte avec cet email.',
     'auth/wrong-password': 'Mot de passe incorrect.',
     'auth/invalid-credential': 'Identifiants incorrects.',
-    'auth/too-many-requests': 'Trop de tentatives, réessayez plus tard.'
+    'auth/too-many-requests': 'Trop de tentatives, réessayez plus tard.',
+    'auth/unauthorized-domain': 'Ce site n\'est pas autorisé pour la connexion Google (domaine non déclaré dans Firebase).'
   };
   return map[code] || 'Erreur de connexion (' + code + ')';
 }
