@@ -301,7 +301,7 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
 </nav>
 
 <!-- ══ PAGE 1 — CONFIG ══ -->
-<div class="page active" id="page1">
+<div class="page" id="page1">
 <div class="wrap">
   <div class="sec-ttl">⚙️ Configuration du tournoi</div>
   <div class="card">
@@ -345,7 +345,7 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
     <div style="font-size:13px;line-height:1.8;color:var(--ink2)">
       <strong>Phase 1 — Poules de 4 :</strong> chaque équipe affronte toutes les autres de son groupe. Score max <span id="ruleScoreMax">13</span> pts avec <span id="ruleEcart">2</span> pts d'écart minimum.<br>
       <strong>Tiebreakers :</strong> 1) Victoires · 2) Confrontation directe · 3) Goal-average général · 4) Points marqués.<br>
-      <strong>Phase 2 — Qualification :</strong> les 1ers et 2es de chaque groupe → tableau <strong>Principale</strong> ; les 3es et 4es → tableau <strong>Consolante</strong>. Répartition intelligente pour éviter les affiches déjà jouées en poule dès le 1er tour.<br>
+      <strong>Phase 2 — Qualification :</strong> les 1ers et 2es de chaque groupe → tableau <strong>Principale</strong> ; les 3es et 4es → tableau <strong>Consolante</strong>.<br>
       <strong>Phase 2 — Élimination directe avec classement complet :</strong> 1/8, 1/4, demi-finale, finale (selon l'effectif). Chaque équipe battue rejoint un mini-tableau de classement avec les autres perdantes de son tour : toutes les équipes jouent ainsi le même nombre de matchs jusqu'au classement complet 1 → dernière place.<br>
       <strong>Classement final :</strong> tableau Principale en tête, puis Consolante.
     </div>
@@ -500,8 +500,8 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
       <strong>Format :</strong> doublettes (2 joueurs), parties au temps (≈ 45 min), score maximum <strong>13 points</strong> avec <strong>2 points d'écart minimum</strong>.<br><br>
       <strong>Phase 1 — Poules de 4 :</strong> chaque équipe rencontre toutes les autres de son groupe en aller simple.<br><br>
       <strong>Classement de poule :</strong> 1) Victoires (2 pts/victoire) · 2) Confrontation directe (en cas d'ex-æquo) · 3) Goal-average général · 4) Points marqués.<br><br>
-      <strong>Phase 2 — Qualification :</strong> les 2 premiers de chaque groupe → tableau <strong>Principale</strong> ; les équipes classées 3e et au-delà → tableau <strong>Consolante</strong>. La répartition dans les tableaux évite les confrontations rematch du 1er tour.<br><br>
-      <strong>Phase 2 — Élimination directe avec classement complet :</strong> 1/8, 1/4, demi-finale, finale (selon effectif). Chaque équipe battue rejoint un mini-tableau de classement avec les autres équipes éliminées au même tour, lui-même joué par élimination directe. Résultat : toutes les équipes — gagnantes comme perdantes — jouent le même nombre de matchs, et le classement final va de la 1ère à la dernière place.<br><br>
+      <strong>Phase 2 — Qualification :</strong> les 2 premiers de chaque groupe → tableau <strong>Principale</strong> ; les équipes classées 3e et au-delà → tableau <strong>Consolante</strong>.<br><br>
+      <strong>Phase 2 — Élimination directe avec classement complet :</strong> 1/8, 1/4, demi-finale, finale (selon effectif). Chaque équipe battue rejoint un mini-tableau de classement avec les autres équipes éliminées au même tour.<br><br>
       <strong>Classement final :</strong> le tableau Principale détermine les places 1 à N, le tableau Consolante complète le classement.
     </div>
   </div>
@@ -510,7 +510,7 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
 <script type="module">
 import { initializeApp } from "firebase/app";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged,
-         createUserWithEmailAndPassword, GoogleAuthProvider, signInWithRedirect,
+         createUserWithEmailAndPassword, GoogleAuthProvider, signInWithPopup,
          getRedirectResult, setPersistence, browserSessionPersistence } from "firebase/auth";
 import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot,
          collection, getDocs, deleteDoc, increment } from "firebase/firestore";
@@ -532,6 +532,7 @@ const auth = getAuth(app);
 const db = getFirestore(app);
 
 try { await setPersistence(auth, browserSessionPersistence); } catch (e) { console.warn('setPersistence', e); }
+
 const secondaryApp = initializeApp(firebaseConfig, 'secondary');
 const secondaryAuth = getAuth(secondaryApp);
 
@@ -580,92 +581,33 @@ const ST = {
   }
 };
 
+// ═══════════════════════════════════════════════════════════
+// FONCTIONS UTILITAIRES
+// ═══════════════════════════════════════════════════════════
 function isAdmin()  { return USER_ROLE === 'admin'; }
 function isScorer() { return USER_ROLE === 'admin' || USER_ROLE === 'scorer'; }
 function isLiveBlocked() { return USER_ROLE === 'spectator' && !ST.liveOpen; }
+
 function shuffle(arr) { const a = arr.slice(); for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; }
+
 function addMinutes(timeStr, mins) {
   const [h, m] = (timeStr || '09:00').split(':').map(Number);
   const total = h * 60 + m + mins;
   const hh = Math.floor((total / 60 + 24 * 10) % 24), mm = ((total % 60) + 60) % 60;
   return String(hh).padStart(2, '0') + ':' + String(mm).padStart(2, '0');
 }
+
 function tObj(id)  { return ST.teams.find(t => t.id === id); }
 function tName(id) { const t = tObj(id); return t ? t.name : '?'; }
 function tClub(id) { const t = tObj(id); return t ? t.club : ''; }
 
-// ─── Fonctions globales pour les appels inline ───
-window.toggleRulesPublic = function() {
-  const el = document.getElementById('rulesModal');
-  if (el) el.style.display = el.style.display === 'flex' ? 'none' : 'flex';
-};
+// ═══════════════════════════════════════════════════════════
+// AUTHENTIFICATION
+// ═══════════════════════════════════════════════════════════
 
-// ─── Auth ──────────────────────────────────────────────────
-onAuthStateChanged(auth, async (user) => {
-  if (user) {
-    CURRENT_USER = user;
-    let role = 'spectator';
-    try {
-      const snap = await getDoc(doc(db, 'users', user.uid));
-      if (snap.exists()) role = snap.data().role || 'spectator';
-    } catch (e) { console.warn('lecture rôle échouée', e); }
-    USER_ROLE = role;
-    showApp();
-    applyRoleUI();
-    subscribeToTournament();
-    subscribeToResults();
-    if (isAdmin()) subscribeToRegistrations();
-  } else {
-    CURRENT_USER = null; USER_ROLE = null;
-    showLogin();
-  }
-});
-
-window.loginGoogle = async function() {
-  const provider = new GoogleAuthProvider();
-  try {
-    showAuthMsg('Redirection vers Google...', 'var(--ink2)');
-    await signInWithRedirect(auth, provider);
-  } catch (e) {
-    showAuthMsg(authErrMsg(e.code), 'var(--red)');
-  }
-};
-
-getRedirectResult(auth).catch((e) => {
-  if (e && e.code) showAuthMsg(authErrMsg(e.code), 'var(--red)');
-});
-
-window.loginEmail = async function() {
-  const email = document.getElementById('loginEmailInput').value.trim();
-  const pass  = document.getElementById('loginPassInput').value;
-  if (!email || !pass) { showAuthMsg('Email et mot de passe requis.', 'var(--red)'); return; }
-  try { await signInWithEmailAndPassword(auth, email, pass); }
-  catch (e) { showAuthMsg(authErrMsg(e.code), 'var(--red)'); }
-};
-
-window.logout = async function() {
-  unsubAll();
-  await signOut(auth);
-  USER_ROLE = null; CURRENT_USER = null;
-  showLogin();
-};
-
-window.exitLiveClosedToHome = function() {
-  pendingSpecTarget = null;
-  const overlay = document.getElementById('liveClosedOverlay');
-  if (overlay) overlay.style.display = 'none';
-  unsubAll();
-  USER_ROLE = null; CURRENT_USER = null; ST.page = 1; ST.regSubmitted = false;
-  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  const p1 = document.getElementById('page1');
-  if (p1) p1.classList.add('active');
-  showLogin();
-};
-
-function unsubAll() {
-  if (unsubResults)    { unsubResults();    unsubResults = null; }
-  if (unsubLiveWatch)  { unsubLiveWatch();  unsubLiveWatch = null; }
-  if (liveWatchIv)     { clearInterval(liveWatchIv); liveWatchIv = null; }
+function showAuthMsg(msg, color) {
+  const el = document.getElementById('authMsg');
+  if (el) { el.textContent = msg; el.style.color = color; }
 }
 
 function authErrMsg(code) {
@@ -675,15 +617,48 @@ function authErrMsg(code) {
     'auth/wrong-password': 'Mot de passe incorrect.',
     'auth/invalid-credential': 'Identifiants incorrects.',
     'auth/too-many-requests': 'Trop de tentatives, réessayez plus tard.',
-    'auth/unauthorized-domain': 'Ce site n\'est pas autorisé pour la connexion Google (domaine non déclaré dans Firebase).'
+    'auth/unauthorized-domain': 'Ce site n\'est pas autorisé pour la connexion Google.',
+    'auth/popup-closed-by-user': 'Fenêtre de connexion fermée.',
+    'auth/popup-blocked': 'Fenêtre pop-up bloquée par votre navigateur.'
   };
   return map[code] || 'Erreur de connexion (' + code + ')';
 }
 
-function showAuthMsg(msg, color) {
-  const el = document.getElementById('authMsg');
-  if (el) { el.textContent = msg; el.style.color = color; }
-}
+window.loginGoogle = async function() {
+  const provider = new GoogleAuthProvider();
+  try {
+    showAuthMsg('Connexion en cours...', 'var(--ink2)');
+    const result = await signInWithPopup(auth, provider);
+    console.log('Connexion réussie:', result.user.email);
+  } catch (e) {
+    console.error('Erreur Google:', e);
+    if (e.code === 'auth/popup-closed-by-user') {
+      showAuthMsg('Fenêtre de connexion fermée. Réessayez.', 'var(--red)');
+    } else if (e.code === 'auth/unauthorized-domain') {
+      showAuthMsg('⚠️ Domaine non autorisé. Vérifiez la console Firebase.', 'var(--red)');
+    } else {
+      showAuthMsg(authErrMsg(e.code), 'var(--red)');
+    }
+  }
+};
+
+window.loginEmail = async function() {
+  const email = document.getElementById('loginEmailInput').value.trim();
+  const pass  = document.getElementById('loginPassInput').value;
+  if (!email || !pass) { showAuthMsg('Email et mot de passe requis.', 'var(--red)'); return; }
+  try {
+    await signInWithEmailAndPassword(auth, email, pass);
+  } catch (e) {
+    showAuthMsg(authErrMsg(e.code), 'var(--red)');
+  }
+};
+
+window.logout = async function() {
+  unsubAll();
+  await signOut(auth);
+  USER_ROLE = null; CURRENT_USER = null;
+  showLogin();
+};
 
 function showLogin() {
   document.getElementById('loginScreen').style.display = 'flex';
@@ -695,6 +670,50 @@ function showApp() {
   document.getElementById('appScreen').style.display = 'block';
 }
 
+// ═══════════════════════════════════════════════════════════
+// AUTH STATE OBSERVER
+// ═══════════════════════════════════════════════════════════
+onAuthStateChanged(auth, async (user) => {
+  console.log('Auth state changed:', user ? user.email : 'no user');
+  
+  if (user) {
+    CURRENT_USER = user;
+    let role = 'spectator';
+    try {
+      const snap = await getDoc(doc(db, 'users', user.uid));
+      if (snap.exists()) {
+        role = snap.data().role || 'spectator';
+        console.log('Rôle trouvé:', role);
+      } else {
+        console.log('Aucun rôle trouvé, création par défaut');
+        await setDoc(doc(db, 'users', user.uid), { 
+          email: user.email, 
+          role: 'spectator' 
+        });
+      }
+    } catch (e) { 
+      console.warn('lecture rôle échouée', e); 
+    }
+    USER_ROLE = role;
+    showApp();
+    applyRoleUI();
+    subscribeToTournament();
+    subscribeToResults();
+    if (isAdmin()) subscribeToRegistrations();
+  } else {
+    console.log('Utilisateur déconnecté');
+    CURRENT_USER = null; USER_ROLE = null;
+    showLogin();
+  }
+});
+
+getRedirectResult(auth).catch((e) => {
+  console.warn('Redirect result:', e);
+});
+
+// ═══════════════════════════════════════════════════════════
+// RÔLE UI
+// ═══════════════════════════════════════════════════════════
 function applyRoleUI() {
   document.querySelectorAll('[data-role]').forEach(el => {
     const need = el.dataset.role;
@@ -714,7 +733,50 @@ function applyRoleUI() {
   else goTo(ST.phase === 'config' && ST.teams.length === 0 ? 1 : (ST.page === 1 ? 4 : ST.page));
 }
 
-// ─── Live spectateur ──────────────────────────────────────
+// ═══════════════════════════════════════════════════════════
+// MODE SPECTATEUR
+// ═══════════════════════════════════════════════════════════
+window.toggleRulesPublic = function() {
+  const el = document.getElementById('rulesModal');
+  if (el) el.style.display = el.style.display === 'flex' ? 'none' : 'flex';
+};
+
+window.toggleRules = function() {
+  ST.rulesOpen = !ST.rulesOpen;
+  const el = document.getElementById('rulesModal');
+  if (el) el.style.display = ST.rulesOpen ? 'flex' : 'none';
+  if (!ST.rulesOpen) handleLiveOpenChange(ST.liveOpen);
+};
+
+window.exitLiveClosedToHome = function() {
+  pendingSpecTarget = null;
+  const overlay = document.getElementById('liveClosedOverlay');
+  if (overlay) overlay.style.display = 'none';
+  unsubAll();
+  USER_ROLE = null; CURRENT_USER = null; ST.page = 1; ST.regSubmitted = false;
+  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
+  const p1 = document.getElementById('page1');
+  if (p1) p1.classList.add('active');
+  showLogin();
+};
+
+function unsubAll() {
+  if (unsubResults)    { unsubResults();    unsubResults = null; }
+  if (unsubTournament) { unsubTournament(); unsubTournament = null; }
+  if (unsubLiveWatch)  { unsubLiveWatch();  unsubLiveWatch = null; }
+  if (liveWatchIv)     { clearInterval(liveWatchIv); liveWatchIv = null; }
+}
+
+const LIVE_FREE_PAGES = ['R', 'REG'];
+
+function updateSpecNavForPage(n) {
+  const restricted = n === 'REG';
+  ['4', '5', 'T', 'TV'].forEach(t => {
+    const btn = document.querySelector(`.spec-nav-btn[data-target="${t}"]`);
+    if (btn) btn.style.display = restricted ? 'none' : '';
+  });
+}
+
 window.enterLiveModeAndGo = async function(target) {
   if (target === 'R') { toggleRules(); return; }
 
@@ -723,7 +785,9 @@ window.enterLiveModeAndGo = async function(target) {
     try {
       const snap = await getDoc(doc(db, 'petanque', 'status'));
       liveIsOpen = snap.exists() && snap.data().liveOpen === true;
-    } catch (e) {}
+    } catch (e) {
+      console.warn('Erreur vérification live:', e);
+    }
     if (!liveIsOpen) {
       const msgEl = document.getElementById('specPublicMsg');
       if (msgEl) msgEl.textContent = "🔴 Live actuellement fermé — l'organisateur n'a pas encore ouvert l'accès en direct.";
@@ -748,7 +812,16 @@ window.enterLiveModeAndGo = async function(target) {
   else if (target === 4) goTo(4);
 };
 
-const LIVE_FREE_PAGES = ['R', 'REG'];
+window.spectatorGoLive = async function(n) {
+  try { const snap = await getDoc(doc(db, 'petanque', 'status')); if (snap.exists()) handleLiveOpenChange(snap.data().liveOpen === true); } catch (e) {}
+  if (!LIVE_FREE_PAGES.includes(n) && isLiveBlocked()) {
+    pendingSpecTarget = n;
+    const overlay = document.getElementById('liveClosedOverlay');
+    if (overlay) overlay.style.display = 'flex';
+    return;
+  }
+  goTo(n);
+};
 
 function handleLiveOpenChange(nowOpen) {
   ST.liveOpen = nowOpen;
@@ -778,25 +851,11 @@ function stopLiveWatch() {
   if (liveWatchIv)    { clearInterval(liveWatchIv); liveWatchIv = null; }
 }
 
-function updateRegistrationUI() {
-  const box = document.getElementById('loginRegisterBox');
-  if (box) box.style.display = ST.registrationOpen ? 'block' : 'none';
-  const navBtn = document.getElementById('specNavRegBtn');
-  if (navBtn) navBtn.style.display = (USER_ROLE === 'spectator' && ST.registrationOpen) ? '' : 'none';
-  if (ST.page === 'REG') renderRegisterPage();
-}
-
-onSnapshot(doc(db, 'petanque', 'status'), snap => {
-  if (snap.exists()) {
-    const d = snap.data();
-    ST.registrationOpen = d.registrationOpen === true;
-    ST.registrationCount = d.registrationCount || 0;
-    updateRegistrationUI();
-  }
-}, () => {});
-
-// ─── Firestore — abonnements ──────────────────────────────
+// ═══════════════════════════════════════════════════════════
+// FIRESTORE ABONNEMENTS
+// ═══════════════════════════════════════════════════════════
 function subscribeToTournamentPublic() {
+  if (unsubTournament) { unsubTournament(); unsubTournament = null; }
   unsubTournament = onSnapshot(doc(db, 'petanque', 'current'), snap => {
     if (!snap.exists()) return;
     applyTournamentData(snap.data());
@@ -805,6 +864,7 @@ function subscribeToTournamentPublic() {
 }
 
 function subscribeToResultsPublic() {
+  if (unsubResults) { unsubResults(); unsubResults = null; }
   unsubResults = onSnapshot(collection(db, 'petanque_results'), snap => {
     snap.docChanges().forEach(ch => {
       if (ch.type === 'removed') delete ST.results[ch.doc.id];
@@ -815,8 +875,13 @@ function subscribeToResultsPublic() {
 }
 
 function subscribeToTournament() {
+  if (unsubTournament) { unsubTournament(); unsubTournament = null; }
   unsubTournament = onSnapshot(doc(db, 'petanque', 'current'), snap => {
-    if (!snap.exists()) return;
+    if (!snap.exists()) {
+      console.log('Aucune donnée de tournoi trouvée');
+      return;
+    }
+    console.log('Données tournoi reçues');
     applyTournamentData(snap.data());
     updateLiveToggleBtn();
     updateRegistrationToggleBtn();
@@ -826,6 +891,7 @@ function subscribeToTournament() {
 }
 
 function subscribeToResults() {
+  if (unsubResults) { unsubResults(); unsubResults = null; }
   unsubResults = onSnapshot(collection(db, 'petanque_results'), snap => {
     snap.docChanges().forEach(ch => {
       if (ch.type === 'removed') delete ST.results[ch.doc.id];
@@ -838,9 +904,6 @@ function subscribeToResults() {
 function applyTournamentData(data) {
   Object.assign(ST.cfg, data.cfg || {});
   if (!Array.isArray(ST.cfg.pauses)) ST.cfg.pauses = [];
-  if (!ST.cfg.pauses.length && data.cfg && data.cfg.pauseEnabled) {
-    ST.cfg.pauses = [{ id: 'pz-migre', label: 'Pause déjeuner', mode: data.cfg.pauseMode || 'afterRound', afterRound: data.cfg.pauseAfter || 1, min: data.cfg.pauseMin || 60 }];
-  }
   ST.teams = data.teams || [];
   ST.groups = data.groups || [];
   ST.poolSchedule = data.poolSchedule || [];
@@ -866,7 +929,9 @@ async function saveResult(matchId, ga, gb, bye) {
   catch (e) { console.error('saveResult', e); }
 }
 
-// ─── Navigation ───────────────────────────────────────────
+// ═══════════════════════════════════════════════════════════
+// NAVIGATION
+// ═══════════════════════════════════════════════════════════
 function refreshCurrentPage() {
   if (ST.page === 1) syncCfgForm();
   if (ST.page === 2) renderTeamsPage();
@@ -928,14 +993,6 @@ window.goTo = function(n) {
   if (n === 5) renderFinalPage();
 };
 
-function updateSpecNavForPage(n) {
-  const restricted = n === 'REG';
-  ['4', '5', 'T', 'TV'].forEach(t => {
-    const btn = document.querySelector(`.spec-nav-btn[data-target="${t}"]`);
-    if (btn) btn.style.display = restricted ? 'none' : '';
-  });
-}
-
 window.goBack = function() { if (ST.page > 1 && typeof ST.page === 'number') goTo(ST.page - 1); };
 
 function canGoFwd() {
@@ -961,23 +1018,266 @@ function updateSteps(n) {
   });
 }
 
-window.spectatorGoLive = async function(n) {
-  try { const snap = await getDoc(doc(db, 'petanque', 'status')); if (snap.exists()) handleLiveOpenChange(snap.data().liveOpen === true); } catch (e) {}
-  if (!LIVE_FREE_PAGES.includes(n) && isLiveBlocked()) {
-    pendingSpecTarget = n;
-    const overlay = document.getElementById('liveClosedOverlay');
-    if (overlay) overlay.style.display = 'flex';
+// ═══════════════════════════════════════════════════════════
+// INSCRIPTIONS PUBLIQUES
+// ═══════════════════════════════════════════════════════════
+function updateRegistrationUI() {
+  const box = document.getElementById('loginRegisterBox');
+  if (box) box.style.display = ST.registrationOpen ? 'block' : 'none';
+  const navBtn = document.getElementById('specNavRegBtn');
+  if (navBtn) navBtn.style.display = (USER_ROLE === 'spectator' && ST.registrationOpen) ? '' : 'none';
+  if (ST.page === 'REG') renderRegisterPage();
+}
+
+onSnapshot(doc(db, 'petanque', 'status'), snap => {
+  if (snap.exists()) {
+    const d = snap.data();
+    ST.registrationOpen = d.registrationOpen === true;
+    ST.registrationCount = d.registrationCount || 0;
+    updateRegistrationUI();
+  }
+}, () => {});
+
+function registrationCap() { return ST.registrationMax != null ? ST.registrationMax : ST.cfg.n; }
+
+function renderRegisterPage() {
+  const el = document.getElementById('regPageBody'); if (!el) return;
+  if (!ST.registrationOpen) {
+    el.innerHTML = `<div class="info info-b">🔒 Les inscriptions ne sont pas ouvertes pour le moment. Revenez plus tard ou contactez l'organisateur.</div>`;
+    ST.regSubmitted = false;
     return;
   }
-  goTo(n);
+  const cap = registrationCap();
+  const used = ST.registrationCount || 0;
+  const full = used >= cap;
+  if (full && !ST.regSubmitted) {
+    el.innerHTML = `<div class="info info-b">🚫 Les inscriptions en ligne sont complètes (${used}/${cap} équipes). Contactez l'organisateur si vous souhaitez être ajouté(e) en liste d'attente.</div>`;
+    return;
+  }
+  if (ST.regSubmitted) {
+    el.innerHTML = `<div class="info info-g">✅ Votre inscription a bien été prise en compte !<br>Elle est en cours de validation par l'organisateur.</div>
+      <button class="btn btn-ghost btn-sm" style="margin-top:10px" onclick="resetRegistrationForm()">📝 Inscrire une autre équipe</button>`;
+    return;
+  }
+  el.innerHTML = `<div class="info info-b" style="margin-bottom:10px">${used}/${cap} équipes inscrites en ligne</div>
+  <div class="card">
+    <label>Joueur 1 *</label><input type="text" id="regP1" style="margin-bottom:10px" placeholder="Prénom Nom">
+    <label>Joueur 2 *</label><input type="text" id="regP2" style="margin-bottom:10px" placeholder="Prénom Nom">
+    <label>Club</label><input type="text" id="regClub" style="margin-bottom:10px" placeholder="Nom du club">
+    <label>Téléphone</label><input type="tel" id="regTel" style="margin-bottom:10px" placeholder="06 12 34 56 78">
+    <label>Email</label><input type="email" id="regEmail" style="margin-bottom:14px" placeholder="email@exemple.com">
+    <button class="btn btn-b" style="width:100%" onclick="submitRegistration()">Envoyer l'inscription</button>
+    <div id="regMsg" style="margin-top:8px;font-size:13px"></div>
+  </div>`;
+}
+
+window.resetRegistrationForm = function() { ST.regSubmitted = false; renderRegisterPage(); };
+
+window.submitRegistration = async function() {
+  if ((ST.registrationCount || 0) >= registrationCap()) { renderRegisterPage(); return; }
+  const p1 = document.getElementById('regP1').value.trim();
+  const p2 = document.getElementById('regP2').value.trim();
+  const club = document.getElementById('regClub').value.trim();
+  const tel = document.getElementById('regTel').value.trim();
+  const email = document.getElementById('regEmail').value.trim();
+  const msgEl = document.getElementById('regMsg');
+  if (!p1 || !p2) { if (msgEl) { msgEl.textContent = 'Les deux noms de joueurs sont requis.'; msgEl.style.color = 'var(--red)'; } return; }
+  try {
+    const ref = doc(collection(db, 'petanque_registrations'));
+    await setDoc(ref, { p1, p2, club, tel, email, status: 'pending', createdAt: Date.now() });
+    await setDoc(doc(db, 'petanque', 'status'), { registrationCount: increment(1) }, { merge: true });
+    ST.regSubmitted = true;
+    renderRegisterPage();
+  } catch (e) {
+    console.error('submitRegistration', e);
+    if (msgEl) { msgEl.textContent = "Erreur d'envoi : " + e.message; msgEl.style.color = 'var(--red)'; }
+  }
 };
 
-window.toggleRules = function() {
-  ST.rulesOpen = !ST.rulesOpen;
-  const el = document.getElementById('rulesModal');
-  if (el) el.style.display = ST.rulesOpen ? 'flex' : 'none';
-  if (!ST.rulesOpen) handleLiveOpenChange(ST.liveOpen);
+// ═══════════════════════════════════════════════════════════
+// ADMIN — Live / Inscriptions
+// ═══════════════════════════════════════════════════════════
+window.toggleLiveOpen = async function() {
+  if (!isAdmin()) return;
+  ST.liveOpen = !ST.liveOpen;
+  await saveTournament({ liveOpen: ST.liveOpen });
+  await setDoc(doc(db, 'petanque', 'status'), { liveOpen: ST.liveOpen }, { merge: true });
+  updateLiveToggleBtn();
 };
+
+function updateLiveToggleBtn() {
+  const btn = document.getElementById('liveToggleBtn'); if (!btn) return;
+  if (ST.liveOpen) { btn.textContent = '🟢 Live ouvert (spectateurs)'; btn.style.background = 'var(--grn)'; btn.style.borderColor = 'var(--grn)'; btn.style.color = '#fff'; }
+  else             { btn.textContent = '🔴 Live fermé (spectateurs)'; btn.style.background = 'var(--s1)'; btn.style.borderColor = 'var(--red)'; btn.style.color = 'var(--red)'; }
+}
+
+window.toggleRegistrationOpen = async function() {
+  if (!isAdmin()) return;
+  ST.registrationOpen = !ST.registrationOpen;
+  await saveTournament({ registrationOpen: ST.registrationOpen });
+  await setDoc(doc(db, 'petanque', 'status'), { registrationOpen: ST.registrationOpen }, { merge: true });
+  updateRegistrationToggleBtn();
+  updateRegistrationUI();
+};
+
+window.saveRegistrationMax = async function() {
+  if (!isAdmin()) return;
+  const el = document.getElementById('registrationMaxInput'); if (!el) return;
+  const v = el.value.trim();
+  ST.registrationMax = v === '' ? null : Math.max(0, +v);
+  await saveTournament({ registrationMax: ST.registrationMax });
+};
+
+function updateRegistrationToggleBtn() {
+  const btn = document.getElementById('registrationToggleBtn'); if (!btn) return;
+  if (ST.registrationOpen) { btn.textContent = '🟢 Inscriptions ouvertes (public)'; btn.style.background = 'var(--grn)'; btn.style.borderColor = 'var(--grn)'; btn.style.color = '#fff'; }
+  else                     { btn.textContent = '🔴 Inscriptions fermées (public)'; btn.style.background = 'var(--s1)'; btn.style.borderColor = 'var(--red)'; btn.style.color = 'var(--red)'; }
+  const maxEl = document.getElementById('registrationMaxInput');
+  if (maxEl && document.activeElement !== maxEl) maxEl.value = ST.registrationMax != null ? ST.registrationMax : '';
+}
+
+function subscribeToRegistrations() {
+  onSnapshot(collection(db, 'petanque_registrations'), snap => {
+    ST.registrations = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => r.status !== 'accepted' && r.status !== 'rejected');
+    renderRegistrationsPanel();
+  }, e => console.warn('subscribeToRegistrations', e));
+}
+
+function renderRegistrationsPanel() {
+  const el = document.getElementById('registrationsListEl'); if (!el) return;
+  const badge = document.getElementById('registrationsCount');
+  if (badge) badge.textContent = ST.registrations.length ? String(ST.registrations.length) : '';
+  if (!ST.registrations.length) { el.innerHTML = '<div class="info info-b">Aucune inscription en attente.</div>'; return; }
+  el.innerHTML = ST.registrations.map(r => `
+    <div style="display:flex;align-items:center;gap:10px;background:var(--s1);border:1px solid var(--bdr);border-radius:10px;padding:10px 14px;margin-bottom:6px;flex-wrap:wrap">
+      <div style="flex:1;min-width:180px">
+        <div style="font-weight:700">${r.p1} / ${r.p2}</div>
+        <div style="font-size:12px;color:var(--muted)">${r.club || 'Sans club'}${r.tel ? ' · 📞 ' + r.tel : ''}${r.email ? ' · ✉️ ' + r.email : ''}</div>
+      </div>
+      <button class="btn btn-b btn-xs" onclick="acceptRegistration('${r.id}')">✓ Valider</button>
+      <button class="btn btn-ghost btn-xs" onclick="rejectRegistration('${r.id}')" style="color:var(--red)">✕ Refuser</button>
+    </div>`).join('');
+}
+
+window.acceptRegistration = async function(id) {
+  if (!isAdmin()) return;
+  const r = ST.registrations.find(x => x.id === id); if (!r) return;
+  if (ST.teams.length >= ST.cfg.n) { alert("Le nombre d'équipes maximum (" + ST.cfg.n + ") est déjà atteint."); return; }
+  const name = r.p1 + ' / ' + r.p2;
+  ST.teams.push({ id: 't' + Date.now() + Math.floor(Math.random() * 1000), p1: r.p1, p2: r.p2, club: r.club || '', lv: 3, name });
+  await saveTournament({ teams: ST.teams });
+  await setDoc(doc(db, 'petanque_registrations', id), { status: 'accepted' }, { merge: true });
+  renderTeamsPage();
+};
+
+window.rejectRegistration = async function(id) {
+  if (!isAdmin()) return;
+  const r = ST.registrations.find(x => x.id === id);
+  const contact = r ? [r.tel, r.email].filter(Boolean).join(' / ') : '';
+  const warn = contact ? `\n\nPensez à prévenir l'équipe (${contact}).` : '';
+  if (!confirm('Refuser cette inscription ?' + warn)) return;
+  await setDoc(doc(db, 'petanque_registrations', id), { status: 'rejected' }, { merge: true });
+  await setDoc(doc(db, 'petanque', 'status'), { registrationCount: increment(-1) }, { merge: true });
+};
+
+// ═══════════════════════════════════════════════════════════
+// ADMIN — GESTION STAFF
+// ═══════════════════════════════════════════════════════════
+window.toggleAdminPanel = function() {
+  const el = document.getElementById('adminPanel');
+  el.style.display = el.style.display === 'none' ? 'block' : 'none';
+  if (el.style.display === 'block') loadUserList();
+};
+
+window.adminCreateUser = async function() {
+  const email = document.getElementById('newUserEmail').value.trim();
+  const pass  = document.getElementById('newUserPass').value;
+  const role  = document.getElementById('newUserRole').value;
+  if (!email || !pass) { alert('Email et mot de passe requis.'); return; }
+  try {
+    const cred = await createUserWithEmailAndPassword(secondaryAuth, email, pass);
+    await setDoc(doc(db, 'users', cred.user.uid), { email, role });
+    await signOut(secondaryAuth);
+    document.getElementById('newUserEmail').value = '';
+    document.getElementById('newUserPass').value = '';
+    loadUserList();
+    alert('✅ Compte créé : ' + email + ' (' + role + ')');
+  } catch (e) { alert('Erreur : ' + e.message); }
+};
+
+window.loadUserList = async function() {
+  const el = document.getElementById('userListEl'); if (!el) return;
+  try {
+    const snap = await getDocs(collection(db, 'users'));
+    el.innerHTML = snap.docs.map(d => {
+      const u = d.data();
+      const roleColor = u.role === 'admin' ? 'var(--brand)' : u.role === 'scorer' ? 'var(--blu)' : 'var(--muted)';
+      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 10px;background:var(--s1);border:1px solid var(--bdr);border-radius:6px;margin-bottom:4px">
+        <div>
+          <span style="font-size:13px">${u.email}</span>
+          <span style="color:${roleColor};font-size:11px;font-weight:700;margin-left:8px">${u.role === 'admin' ? '👑' : u.role === 'scorer' ? '🎯' : '👁'} ${u.role}</span>
+        </div>
+        <div style="display:flex;gap:6px">
+          <select style="padding:4px 6px;font-size:11px;border-radius:6px;border:1px solid var(--bdr)" onchange="changeUserRole('${d.id}',this.value)">
+            <option value="scorer" ${u.role==='scorer'?'selected':''}>Scorer</option>
+            <option value="admin"  ${u.role==='admin'?'selected':''}>Admin</option>
+          </select>
+          <button class="btn btn-ghost btn-xs" onclick="deleteUserFromList('${d.id}')" style="color:var(--red)">🗑️</button>
+        </div>
+      </div>`;
+    }).join('') || '<div class="info info-b">Aucun compte staff créé.</div>';
+  } catch (e) { document.getElementById('userListEl').innerHTML = '<div class="info info-y">Lecture impossible.</div>'; }
+};
+
+window.changeUserRole = async function(uid, role) {
+  try { await updateDoc(doc(db, 'users', uid), { role }); loadUserList(); }
+  catch (e) { alert('Erreur : ' + e.message); }
+};
+
+window.deleteUserFromList = async function(uid) {
+  if (!confirm('Retirer ce compte des rôles (devient spectateur) ?')) return;
+  await deleteDoc(doc(db, 'users', uid)); loadUserList();
+};
+
+// ═══════════════════════════════════════════════════════════
+// ADMIN — ACTIONS
+// ═══════════════════════════════════════════════════════════
+window.newTournament = async function() {
+  if (!isAdmin()) return;
+  if (!confirm('⚠️ Repartir de zéro ? Tout sera effacé.')) return;
+  ST.teams = []; ST.groups = []; ST.poolSchedule = []; ST.brackets = { P: null, C: null }; ST.results = {};
+  ST.phase = 'config'; ST.activePoolRound = 0; ST.activeBracketRound = { P: 0, C: 0 };
+  await saveTournament({ teams: [], groups: [], poolSchedule: [], brackets: { P: null, C: null }, phase: 'config', activePoolRound: 0, activeBracketRound: { P: 0, C: 0 }, liveOpen: false, registrationOpen: false, registrationMax: null });
+  await setDoc(doc(db, 'petanque', 'status'), { liveOpen: false, registrationOpen: false, registrationCount: 0 }, { merge: true });
+  try { const snap = await getDocs(collection(db, 'petanque_results')); await Promise.all(snap.docs.map(d => deleteDoc(doc(db, 'petanque_results', d.id)))); } catch (e) {}
+  try { const snap = await getDocs(collection(db, 'petanque_registrations')); await Promise.all(snap.docs.map(d => deleteDoc(doc(db, 'petanque_registrations', d.id)))); } catch (e) {}
+  goTo(1);
+};
+
+window.resetAllScores = async function() {
+  if (!isAdmin()) return;
+  if (!confirm('⚠️ Effacer tous les scores saisis ?')) return;
+  ST.results = {};
+  try { const snap = await getDocs(collection(db, 'petanque_results')); await Promise.all(snap.docs.map(d => deleteDoc(doc(db, 'petanque_results', d.id)))); } catch (e) {}
+  refreshCurrentPage();
+};
+
+window.reloadApp = function() { location.reload(); };
+
+window.goToLive = function() { goTo(4); closeMobileMenu(); };
+
+window.toggleMobileMenu = function() { document.getElementById('mobileDrawer').classList.toggle('open'); document.getElementById('menuOverlay').classList.toggle('open'); };
+
+window.closeMobileMenu = function() { document.getElementById('mobileDrawer').classList.remove('open'); document.getElementById('menuOverlay').classList.remove('open'); };
+
+function syncDrawerButtons() {
+  [['liveBtn','drawerLiveBtn'],['tvBtn','drawerTvBtn'],['adminBtn','drawerAdminBtn'],['backBtn','drawerBackBtn'],['fwdBtn','drawerFwdBtn'],['logoutBtn','drawerLogoutBtn']].forEach(([deskId, drawId]) => {
+    const d = document.getElementById(deskId), w = document.getElementById(drawId);
+    if (d && w) w.style.display = d.style.display;
+  });
+}
+
+window.addEventListener('resize', () => { if (window.innerWidth > 767) closeMobileMenu(); });
 
 // ═══════════════════════════════════════════════════════════
 // CONFIGURATION
@@ -1158,7 +1458,7 @@ window.autoFillTeams = async function() {
 };
 
 // ═══════════════════════════════════════════════════════════
-// PHASE 1 — GROUPES DE 4 (round-robin)
+// PHASE 1 — GROUPES DE 4
 // ═══════════════════════════════════════════════════════════
 function computeGroupSizes(n) {
   let numGroups = Math.max(1, Math.round(n / 4));
@@ -1311,7 +1611,7 @@ window.startTournament = async function() {
 };
 
 // ═══════════════════════════════════════════════════════════
-// PHASE 2 — TABLEAUX Principale & Consolante
+// PHASE 2 — TABLEAUX
 // ═══════════════════════════════════════════════════════════
 function nextPow2(n) { let p = 1; while (p < n) p *= 2; return p; }
 
@@ -1421,7 +1721,7 @@ function bracketLoser(bracket, round, idx) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// SYSTÈME GÉNÉRIQUE DE CLASSEMENT COMPLET
+// SYSTÈME DE CLASSEMENT COMPLET (fonctions simplifiées)
 // ═══════════════════════════════════════════════════════════
 function nodeMatchId(bracket, path, round, idx) {
   if (!path.length) return bracketMatchId(bracket, round, idx);
@@ -1911,257 +2211,6 @@ function renderTeamsSpecPage() {
 }
 
 // ═══════════════════════════════════════════════════════════
-// INSCRIPTION PUBLIQUE
-// ═══════════════════════════════════════════════════════════
-function registrationCap() { return ST.registrationMax != null ? ST.registrationMax : ST.cfg.n; }
-
-function renderRegisterPage() {
-  const el = document.getElementById('regPageBody'); if (!el) return;
-  if (!ST.registrationOpen) {
-    el.innerHTML = `<div class="info info-b">🔒 Les inscriptions ne sont pas ouvertes pour le moment. Revenez plus tard ou contactez l'organisateur.</div>`;
-    ST.regSubmitted = false;
-    return;
-  }
-  const cap = registrationCap();
-  const used = ST.registrationCount || 0;
-  const full = used >= cap;
-  if (full && !ST.regSubmitted) {
-    el.innerHTML = `<div class="info info-b">🚫 Les inscriptions en ligne sont complètes (${used}/${cap} équipes). Contactez l'organisateur si vous souhaitez être ajouté(e) en liste d'attente.</div>`;
-    return;
-  }
-  if (ST.regSubmitted) {
-    el.innerHTML = `<div class="info info-g">✅ Votre inscription a bien été prise en compte !<br>Elle est en cours de validation par l'organisateur : si elle est acceptée, votre équipe apparaîtra dans la liste des équipes engagées. Si elle ne peut pas être acceptée (places complètes, doublon…), vous en serez avisé(e) très rapidement au numéro ou à l'email indiqué.</div>
-      <button class="btn btn-ghost btn-sm" style="margin-top:10px" onclick="resetRegistrationForm()">📝 Inscrire une autre équipe</button>`;
-    return;
-  }
-  el.innerHTML = `<div class="info info-b" style="margin-bottom:10px">${used}/${cap} équipes inscrites en ligne</div>
-  <div class="card">
-    <label>Joueur 1 *</label><input type="text" id="regP1" style="margin-bottom:10px" placeholder="Prénom Nom">
-    <label>Joueur 2 *</label><input type="text" id="regP2" style="margin-bottom:10px" placeholder="Prénom Nom">
-    <label>Club</label><input type="text" id="regClub" style="margin-bottom:10px" placeholder="Nom du club">
-    <label>Téléphone</label><input type="tel" id="regTel" style="margin-bottom:10px" placeholder="06 12 34 56 78">
-    <label>Email</label><input type="email" id="regEmail" style="margin-bottom:14px" placeholder="email@exemple.com">
-    <button class="btn btn-b" style="width:100%" onclick="submitRegistration()">Envoyer l'inscription</button>
-    <div id="regMsg" style="margin-top:8px;font-size:13px"></div>
-  </div>`;
-}
-
-window.resetRegistrationForm = function() { ST.regSubmitted = false; renderRegisterPage(); };
-
-window.submitRegistration = async function() {
-  if ((ST.registrationCount || 0) >= registrationCap()) { renderRegisterPage(); return; }
-  const p1 = document.getElementById('regP1').value.trim();
-  const p2 = document.getElementById('regP2').value.trim();
-  const club = document.getElementById('regClub').value.trim();
-  const tel = document.getElementById('regTel').value.trim();
-  const email = document.getElementById('regEmail').value.trim();
-  const msgEl = document.getElementById('regMsg');
-  if (!p1 || !p2) { if (msgEl) { msgEl.textContent = 'Les deux noms de joueurs sont requis.'; msgEl.style.color = 'var(--red)'; } return; }
-  try {
-    const ref = doc(collection(db, 'petanque_registrations'));
-    await setDoc(ref, { p1, p2, club, tel, email, status: 'pending', createdAt: Date.now() });
-    await setDoc(doc(db, 'petanque', 'status'), { registrationCount: increment(1) }, { merge: true });
-    ST.regSubmitted = true;
-    renderRegisterPage();
-  } catch (e) {
-    console.error('submitRegistration', e);
-    if (msgEl) { msgEl.textContent = "Erreur d'envoi : " + e.message; msgEl.style.color = 'var(--red)'; }
-  }
-};
-
-// ═══════════════════════════════════════════════════════════
-// ADMIN — Live / Comptes staff / Gestion rôles
-// ═══════════════════════════════════════════════════════════
-window.toggleLiveOpen = async function() {
-  if (!isAdmin()) return;
-  ST.liveOpen = !ST.liveOpen;
-  await saveTournament({ liveOpen: ST.liveOpen });
-  await setDoc(doc(db, 'petanque', 'status'), { liveOpen: ST.liveOpen }, { merge: true });
-  updateLiveToggleBtn();
-};
-
-function updateLiveToggleBtn() {
-  const btn = document.getElementById('liveToggleBtn'); if (!btn) return;
-  if (ST.liveOpen) { btn.textContent = '🟢 Live ouvert (spectateurs)'; btn.style.background = 'var(--grn)'; btn.style.borderColor = 'var(--grn)'; btn.style.color = '#fff'; }
-  else             { btn.textContent = '🔴 Live fermé (spectateurs)'; btn.style.background = 'var(--s1)'; btn.style.borderColor = 'var(--red)'; btn.style.color = 'var(--red)'; }
-}
-
-window.toggleRegistrationOpen = async function() {
-  if (!isAdmin()) return;
-  ST.registrationOpen = !ST.registrationOpen;
-  await saveTournament({ registrationOpen: ST.registrationOpen });
-  await setDoc(doc(db, 'petanque', 'status'), { registrationOpen: ST.registrationOpen }, { merge: true });
-  updateRegistrationToggleBtn();
-  updateRegistrationUI();
-};
-
-window.saveRegistrationMax = async function() {
-  if (!isAdmin()) return;
-  const el = document.getElementById('registrationMaxInput'); if (!el) return;
-  const v = el.value.trim();
-  ST.registrationMax = v === '' ? null : Math.max(0, +v);
-  await saveTournament({ registrationMax: ST.registrationMax });
-};
-
-function updateRegistrationToggleBtn() {
-  const btn = document.getElementById('registrationToggleBtn'); if (!btn) return;
-  if (ST.registrationOpen) { btn.textContent = '🟢 Inscriptions ouvertes (public)'; btn.style.background = 'var(--grn)'; btn.style.borderColor = 'var(--grn)'; btn.style.color = '#fff'; }
-  else                     { btn.textContent = '🔴 Inscriptions fermées (public)'; btn.style.background = 'var(--s1)'; btn.style.borderColor = 'var(--red)'; btn.style.color = 'var(--red)'; }
-  const maxEl = document.getElementById('registrationMaxInput');
-  if (maxEl && document.activeElement !== maxEl) maxEl.value = ST.registrationMax != null ? ST.registrationMax : '';
-}
-
-function subscribeToRegistrations() {
-  onSnapshot(collection(db, 'petanque_registrations'), snap => {
-    ST.registrations = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => r.status !== 'accepted' && r.status !== 'rejected');
-    renderRegistrationsPanel();
-  }, e => console.warn('subscribeToRegistrations', e));
-}
-
-function renderRegistrationsPanel() {
-  const el = document.getElementById('registrationsListEl'); if (!el) return;
-  const badge = document.getElementById('registrationsCount');
-  if (badge) badge.textContent = ST.registrations.length ? String(ST.registrations.length) : '';
-  if (!ST.registrations.length) { el.innerHTML = '<div class="info info-b">Aucune inscription en attente.</div>'; return; }
-  el.innerHTML = ST.registrations.map(r => `
-    <div style="display:flex;align-items:center;gap:10px;background:var(--s1);border:1px solid var(--bdr);border-radius:10px;padding:10px 14px;margin-bottom:6px;flex-wrap:wrap">
-      <div style="flex:1;min-width:180px">
-        <div style="font-weight:700">${r.p1} / ${r.p2}</div>
-        <div style="font-size:12px;color:var(--muted)">${r.club || 'Sans club'}${r.tel ? ' · 📞 ' + r.tel : ''}${r.email ? ' · ✉️ ' + r.email : ''}</div>
-      </div>
-      <button class="btn btn-b btn-xs" onclick="acceptRegistration('${r.id}')">✓ Valider</button>
-      <button class="btn btn-ghost btn-xs" onclick="rejectRegistration('${r.id}')" style="color:var(--red)">✕ Refuser</button>
-    </div>`).join('');
-}
-
-window.acceptRegistration = async function(id) {
-  if (!isAdmin()) return;
-  const r = ST.registrations.find(x => x.id === id); if (!r) return;
-  if (ST.teams.length >= ST.cfg.n) { alert("Le nombre d'équipes maximum (" + ST.cfg.n + ") est déjà atteint. Augmentez-le en page Config ou refusez d'autres inscriptions avant de valider celle-ci."); return; }
-  const name = r.p1 + ' / ' + r.p2;
-  ST.teams.push({ id: 't' + Date.now() + Math.floor(Math.random() * 1000), p1: r.p1, p2: r.p2, club: r.club || '', lv: 3, name });
-  await saveTournament({ teams: ST.teams });
-  await setDoc(doc(db, 'petanque_registrations', id), { status: 'accepted' }, { merge: true });
-  renderTeamsPage();
-};
-
-window.rejectRegistration = async function(id) {
-  if (!isAdmin()) return;
-  const r = ST.registrations.find(x => x.id === id);
-  const contact = r ? [r.tel, r.email].filter(Boolean).join(' / ') : '';
-  const warn = contact ? `\n\nPensez à prévenir l'équipe (${contact}) puisqu'elle a été informée qu'elle serait avisée rapidement en cas de refus.` : '';
-  if (!confirm('Refuser cette inscription ?' + warn)) return;
-  await setDoc(doc(db, 'petanque_registrations', id), { status: 'rejected' }, { merge: true });
-  await setDoc(doc(db, 'petanque', 'status'), { registrationCount: increment(-1) }, { merge: true });
-};
-
-window.toggleAdminPanel = function() {
-  const el = document.getElementById('adminPanel');
-  el.style.display = el.style.display === 'none' ? 'block' : 'none';
-  if (el.style.display === 'block') loadUserList();
-};
-
-window.adminCreateUser = async function() {
-  const email = document.getElementById('newUserEmail').value.trim();
-  const pass  = document.getElementById('newUserPass').value;
-  const role  = document.getElementById('newUserRole').value;
-  if (!email || !pass) { alert('Email et mot de passe requis.'); return; }
-  try {
-    const cred = await createUserWithEmailAndPassword(secondaryAuth, email, pass);
-    await setDoc(doc(db, 'users', cred.user.uid), { email, role });
-    await signOut(secondaryAuth);
-    document.getElementById('newUserEmail').value = '';
-    document.getElementById('newUserPass').value = '';
-    loadUserList();
-    alert('✅ Compte créé : ' + email + ' (' + role + ')');
-  } catch (e) { alert('Erreur : ' + e.message); }
-};
-
-window.loadUserList = async function() {
-  const el = document.getElementById('userListEl'); if (!el) return;
-  try {
-    const snap = await getDocs(collection(db, 'users'));
-    el.innerHTML = snap.docs.map(d => {
-      const u = d.data();
-      const roleColor = u.role === 'admin' ? 'var(--brand)' : u.role === 'scorer' ? 'var(--blu)' : 'var(--muted)';
-      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 10px;background:var(--s1);border:1px solid var(--bdr);border-radius:6px;margin-bottom:4px">
-        <div>
-          <span style="font-size:13px">${u.email}</span>
-          <span style="color:${roleColor};font-size:11px;font-weight:700;margin-left:8px">${u.role === 'admin' ? '👑' : u.role === 'scorer' ? '🎯' : '👁'} ${u.role}</span>
-        </div>
-        <div style="display:flex;gap:6px">
-          <select style="padding:4px 6px;font-size:11px;border-radius:6px;border:1px solid var(--bdr)" onchange="changeUserRole('${d.id}',this.value)">
-            <option value="scorer" ${u.role==='scorer'?'selected':''}>Scorer</option>
-            <option value="admin"  ${u.role==='admin'?'selected':''}>Admin</option>
-          </select>
-          <button class="btn btn-ghost btn-xs" onclick="deleteUserFromList('${d.id}')" style="color:var(--red)">🗑️</button>
-        </div>
-      </div>`;
-    }).join('') || '<div class="info info-b">Aucun compte staff créé.</div>';
-  } catch (e) { document.getElementById('userListEl').innerHTML = '<div class="info info-y">Lecture impossible.</div>'; }
-};
-
-window.changeUserRole = async function(uid, role) {
-  try { await updateDoc(doc(db, 'users', uid), { role }); loadUserList(); }
-  catch (e) { alert('Erreur : ' + e.message); }
-};
-
-window.deleteUserFromList = async function(uid) {
-  if (!confirm('Retirer ce compte des rôles (devient spectateur) ?')) return;
-  await deleteDoc(doc(db, 'users', uid)); loadUserList();
-};
-
-window.newTournament = async function() {
-  if (!isAdmin()) return;
-  if (!confirm('⚠️ Repartir de zéro ? Tout sera effacé.')) return;
-  ST.teams = []; ST.groups = []; ST.poolSchedule = []; ST.brackets = { P: null, C: null }; ST.results = {};
-  ST.phase = 'config'; ST.activePoolRound = 0; ST.activeBracketRound = { P: 0, C: 0 };
-  await saveTournament({ teams: [], groups: [], poolSchedule: [], brackets: { P: null, C: null }, phase: 'config', activePoolRound: 0, activeBracketRound: { P: 0, C: 0 }, liveOpen: false, registrationOpen: false, registrationMax: null });
-  await setDoc(doc(db, 'petanque', 'status'), { liveOpen: false, registrationOpen: false, registrationCount: 0 }, { merge: true });
-  try { const snap = await getDocs(collection(db, 'petanque_results')); await Promise.all(snap.docs.map(d => deleteDoc(doc(db, 'petanque_results', d.id)))); } catch (e) {}
-  try { const snap = await getDocs(collection(db, 'petanque_registrations')); await Promise.all(snap.docs.map(d => deleteDoc(doc(db, 'petanque_registrations', d.id)))); } catch (e) {}
-  goTo(1);
-};
-
-window.resetAllScores = async function() {
-  if (!isAdmin()) return;
-  if (!confirm('⚠️ Effacer tous les scores saisis ?')) return;
-  ST.results = {};
-  try { const snap = await getDocs(collection(db, 'petanque_results')); await Promise.all(snap.docs.map(d => deleteDoc(doc(db, 'petanque_results', d.id)))); } catch (e) {}
-  refreshCurrentPage();
-};
-
-window.reloadApp = function() { location.reload(); };
-
-window.goToLive = function() { goTo(4); closeMobileMenu(); };
-
-window.toggleMobileMenu = function() { document.getElementById('mobileDrawer').classList.toggle('open'); document.getElementById('menuOverlay').classList.toggle('open'); };
-
-window.closeMobileMenu = function() { document.getElementById('mobileDrawer').classList.remove('open'); document.getElementById('menuOverlay').classList.remove('open'); };
-
-function syncDrawerButtons() {
-  [['liveBtn','drawerLiveBtn'],['tvBtn','drawerTvBtn'],['adminBtn','drawerAdminBtn'],['backBtn','drawerBackBtn'],['fwdBtn','drawerFwdBtn'],['logoutBtn','drawerLogoutBtn']].forEach(([deskId, drawId]) => {
-    const d = document.getElementById(deskId), w = document.getElementById(drawId);
-    if (d && w) w.style.display = d.style.display;
-  });
-}
-
-window.addEventListener('resize', () => { if (window.innerWidth > 767) closeMobileMenu(); });
-
-window.printPlanning = function() {
-  let body = `<h2>${ST.cfg.name}</h2><p>Score : ${ST.cfg.scoreMax} pts · Écart minimum : ${ST.cfg.ecart} pts</p><h3>Planning Phase 1</h3>`;
-  const numRounds = Math.max(0, ...ST.poolSchedule.map(m => m.round)) + 1;
-  for (let r = 0; r < numRounds; r++) {
-    body += `<h4>Tour ${r + 1}</h4><table border="1" cellpadding="6" style="border-collapse:collapse;width:100%"><tr><th>Groupe</th><th>Terrain</th><th>Heure</th><th>Équipe A</th><th>Équipe B</th></tr>`;
-    ST.poolSchedule.filter(m => m.round === r).forEach(m => { body += `<tr><td>${m.group}</td><td>${m.court}</td><td>${m.time}</td><td>${tName(m.a)}</td><td>${tName(m.b)}</td></tr>`; });
-    body += '</table>';
-  }
-  const win = window.open('', '_blank');
-  win.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Planning</title><style>body{margin:16px;font-family:sans-serif;font-size:12px}</style></head><body>' + body + '<div style="margin-top:20px"><button onclick="window.print()">Imprimer</button></div></body></html>');
-  win.document.close();
-};
-
-// ═══════════════════════════════════════════════════════════
 // MODE ÉCRAN TV
 // ═══════════════════════════════════════════════════════════
 function getTVSettings() {
@@ -2344,6 +2393,24 @@ function renderTVContent() {
   requestAnimationFrame(startTVAutoScroll);
   scheduleTVAdvance();
 }
+
+// ═══════════════════════════════════════════════════════════
+// PRINT PLANNING
+// ═══════════════════════════════════════════════════════════
+window.printPlanning = function() {
+  let body = `<h2>${ST.cfg.name}</h2><p>Score : ${ST.cfg.scoreMax} pts · Écart minimum : ${ST.cfg.ecart} pts</p><h3>Planning Phase 1</h3>`;
+  const numRounds = Math.max(0, ...ST.poolSchedule.map(m => m.round)) + 1;
+  for (let r = 0; r < numRounds; r++) {
+    body += `<h4>Tour ${r + 1}</h4><table border="1" cellpadding="6" style="border-collapse:collapse;width:100%"><tr><th>Groupe</th><th>Terrain</th><th>Heure</th><th>Équipe A</th><th>Équipe B</th></tr>`;
+    ST.poolSchedule.filter(m => m.round === r).forEach(m => { body += `<tr><td>${m.group}</td><td>${m.court}</td><td>${m.time}</td><td>${tName(m.a)}</td><td>${tName(m.b)}</td></tr>`; });
+    body += '</table>';
+  }
+  const win = window.open('', '_blank');
+  win.document.write('<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Planning</title><style>body{margin:16px;font-family:sans-serif;font-size:12px}</style></head><body>' + body + '<div style="margin-top:20px"><button onclick="window.print()">Imprimer</button></div></body></html>');
+  win.document.close();
+};
+
+console.log('Application chargée ✅');
 </script>
 
 </body>
