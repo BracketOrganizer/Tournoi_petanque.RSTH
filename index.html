@@ -20,7 +20,6 @@
 import { initializeApp } from "firebase/app";
 import { getAuth, signInWithEmailAndPassword, signOut, onAuthStateChanged,
          createUserWithEmailAndPassword, GoogleAuthProvider, signInWithPopup,
-         signInWithRedirect, getRedirectResult,
          setPersistence, inMemoryPersistence } from "firebase/auth";
 import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot,
          collection, getDocs, deleteDoc, increment } from "firebase/firestore";
@@ -29,12 +28,12 @@ import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot,
 // FIREBASE — Projet tournoi-petanque-rsth
 // ═══════════════════════════════════════════════════════════
 const firebaseConfig = {
-  apiKey: "AIzaSyCQhLIo-WXurUBS0QEiOjjd9tby9IKHtGs",
-  authDomain: "tournoi-rsth-de-petanque.firebaseapp.com",
-  projectId: "tournoi-rsth-de-petanque",
-  storageBucket: "tournoi-rsth-de-petanque.firebasestorage.app",
-  messagingSenderId: "206862784229",
-  appId: "1:206862784229:web:bb3ec38b78fdfc6f67a60c"
+  apiKey: "AIzaSyDxDZXcVeo1z92jruaYOcJc7Yo_YkEe6kA",
+  authDomain: "tournoi-de-petanque-rsth.firebaseapp.com",
+  projectId: "tournoi-de-petanque-rsth",
+  storageBucket: "tournoi-de-petanque-rsth.firebasestorage.app",
+  messagingSenderId: "100446891024",
+  appId: "1:100446891024:web:5f717265e874696a1dae95"
 };
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -147,42 +146,16 @@ onAuthStateChanged(auth, async (user) => {
   }
 });
 
-// signInWithPopup dépend du stockage tiers (cookies/localStorage partagés
-// entre la popup et la page) pour transmettre le résultat : de plus en plus
-// bloqué par Chrome/Safari, ce qui fait échouer silencieusement la connexion
-// (Firebase croit que l'utilisateur a fermé la popup lui-même). On utilise
-// donc systématiquement signInWithRedirect, qui ne dépend pas de ça.
-function isStandaloneOrInApp() {
-  const standalone = window.matchMedia('(display-mode: standalone)').matches
-    || window.navigator.standalone === true; // iOS PWA
-  const ua = navigator.userAgent || '';
-  const inApp = /FBAN|FBAV|Instagram|Line\/|MicroMessenger|Twitter|LinkedInApp/i.test(ua);
-  return standalone || inApp;
-}
 window.loginGoogle = async function() {
   const provider = new GoogleAuthProvider();
   try {
-    showAuthMsg('Redirection vers Google…', 'var(--muted)');
-    await signInWithRedirect(auth, provider);
-    // la page va se recharger ; la suite est gérée par getRedirectResult ci-dessous
+    await signInWithPopup(auth, provider);
   } catch (e) {
-    console.error('loginGoogle', e);
-    showAuthMsg(authErrMsg(e.code) + ' [console: ' + (e.message || e) + ']', 'var(--red)');
+    if (e.code !== 'auth/popup-closed-by-user' && e.code !== 'auth/cancelled-popup-request') {
+      showAuthMsg(authErrMsg(e.code), 'var(--red)');
+    }
   }
 };
-// Traite le retour d'une connexion Google par redirection.
-// Doit être appelé au chargement. On affiche systématiquement tout code
-// d'erreur (plus rien n'est masqué) pour pouvoir diagnostiquer.
-getRedirectResult(auth).then((result) => {
-  if (result && result.user) {
-    console.log('getRedirectResult OK', result.user.uid, result.user.email);
-  } else {
-    console.log('getRedirectResult: pas de résultat de redirection en attente (chargement normal de la page).');
-  }
-}).catch((e) => {
-  console.error('getRedirectResult', e);
-  showAuthMsg(authErrMsg(e.code) + ' [console: ' + (e.message || e) + ']', 'var(--red)');
-});
 window.loginEmail = async function() {
   const email = document.getElementById('loginEmailInput').value.trim();
   const pass  = document.getElementById('loginPassInput').value;
@@ -197,18 +170,8 @@ window.logout = async function() {
   USER_ROLE = 'spectator'; CURRENT_USER = null;
   showLogin();
 };
-window.exitLiveClosedToHome = function() {
-  pendingSpecTarget = null;
-  const overlay = document.getElementById('liveClosedOverlay');
-  if (overlay) overlay.style.display = 'none';
-  unsubAll();
-  USER_ROLE = null; CURRENT_USER = null; ST.page = 1; ST.regSubmitted = false;
-  document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-  const p1 = document.getElementById('page1');
-  if (p1) p1.classList.add('active');
-  showLogin();
-};
 function unsubAll() {
+  if (unsubTournament) { unsubTournament(); unsubTournament = null; }
   if (unsubResults)    { unsubResults();    unsubResults = null; }
   if (unsubLiveWatch)  { unsubLiveWatch();  unsubLiveWatch = null; }
   if (liveWatchIv)     { clearInterval(liveWatchIv); liveWatchIv = null; }
@@ -265,10 +228,7 @@ function authErrMsg(code) {
     'auth/user-not-found': 'Aucun compte avec cet email.',
     'auth/wrong-password': 'Mot de passe incorrect.',
     'auth/invalid-credential': 'Identifiants incorrects.',
-    'auth/too-many-requests': 'Trop de tentatives, réessayez plus tard.',
-    'auth/unauthorized-domain': "Ce site n'est pas autorisé dans Firebase (Authentication → Settings → Domaines autorisés).",
-    'auth/operation-not-supported-in-this-environment': "Connexion Google indisponible dans ce navigateur intégré.",
-    'auth/network-request-failed': 'Connexion réseau impossible, réessayez.'
+    'auth/too-many-requests': 'Trop de tentatives, réessayez plus tard.'
   };
   return map[code] || 'Erreur de connexion (' + code + ')';
 }
@@ -305,51 +265,26 @@ function applyRoleUI() {
 
 // ─── Live spectateur ──────────────────────────────────────
 window.enterLiveModeAndGo = async function(target) {
-  // Le règlement est une simple modale indépendante de l'appli : on peut
-  // l'afficher directement depuis l'écran d'accueil, sans jamais entrer en
-  // mode spectateur ni afficher le bandeau applicatif.
-  if (target === 'R') { toggleRules(); return; }
-
-  // Pour tout le reste, sauf l'inscription publique (toujours libre), on
-  // vérifie l'état réel du live AVANT d'entrer dans l'appli : si c'est fermé,
-  // on reste simplement sur l'écran d'accueil avec un message, plutôt que
-  // d'afficher le bandeau applicatif derrière l'overlay de blocage.
-  if (target !== 'REG') {
-    let liveIsOpen = false;
-    try {
-      const snap = await getDoc(doc(db, 'petanque', 'status'));
-      liveIsOpen = snap.exists() && snap.data().liveOpen === true;
-    } catch (e) {}
-    if (!liveIsOpen) {
-      const msgEl = document.getElementById('specPublicMsg');
-      if (msgEl) msgEl.textContent = "🔴 Live actuellement fermé — l'organisateur n'a pas encore ouvert l'accès en direct.";
-      return;
-    }
-  }
-  const msgEl0 = document.getElementById('specPublicMsg');
-  if (msgEl0) msgEl0.textContent = '';
-
   USER_ROLE = 'spectator'; CURRENT_USER = null;
-  // Important : on force aussi la déconnexion de la vraie session Firebase Auth.
-  // Sans ça, si l'utilisateur était (ou reste) connecté en admin/scorer, Firebase
-  // peut réaffirmer cette session à tout moment (rafraîchissement de token,
-  // reconnexion réseau...) et onAuthStateChanged remettrait alors USER_ROLE sur
-  // 'admin'/'scorer' — un rôle jamais bloqué par le live fermé, ce qui ouvrait
-  // le live en douce derrière le dos du blocage spectateur.
-  if (auth.currentUser) { try { await signOut(auth); } catch (e) {} }
+  // Vérification fraîche de l'état du Live AVANT toute navigation : évite que la
+  // page reste sur une valeur mémoire obsolète (encore "ouvert") le temps que les
+  // abonnements Firestore se mettent à jour, ce qui laissait passer la page bloquée
+  // un court instant avant que le message ne s'affiche par-dessus.
+  try {
+    const snap = await getDoc(doc(db, 'petanque', 'status'));
+    if (snap.exists()) ST.liveOpen = snap.data().liveOpen === true;
+  } catch (e) {}
   showApp(); applyRoleUI();
   subscribeToTournamentPublic();
   subscribeToResultsPublic();
   startLiveWatch();
-  // applyRoleUI() peut avoir tenté une navigation par défaut (bloquée si le live
-  // est fermé) et affiché l'overlay avant même qu'on sache où l'utilisateur veut
-  // vraiment aller : on nettoie ça avant la navigation explicite ci-dessous.
   pendingSpecTarget = null;
   const overlayEl = document.getElementById('liveClosedOverlay');
   if (overlayEl) overlayEl.style.display = 'none';
   if (target === 'TV') goTo('TV');
   else if (target === 'T') goTo('T');
   else if (target === 'REG') goTo('REG');
+  else if (target === 'R') { toggleRules(); } // le règlement reste consultable même si le Live est fermé
   else if (target === 4) goTo(4);
 };
 const LIVE_FREE_PAGES = ['R', 'REG']; // si le Live est fermé, seuls le Règlement et l'inscription publique restent accessibles
@@ -359,15 +294,22 @@ function handleLiveOpenChange(nowOpen) {
   if (nowOpen) {
     if (overlay) overlay.style.display = 'none';
     if (pendingSpecTarget) { const t = pendingSpecTarget; pendingSpecTarget = null; goTo(t); }
-  } else if (USER_ROLE === 'spectator' && overlay && !ST.rulesOpen && !LIVE_FREE_PAGES.includes(ST.page)) {
+  } else if (USER_ROLE === 'spectator' && !LIVE_FREE_PAGES.includes(ST.page)) {
+    // Le Live vient de se fermer pendant que le spectateur consultait une page
+    // désormais restreinte : on retire réellement cette page (pas seulement un
+    // message par-dessus), afin qu'elle ne puisse pas réapparaître en fermant
+    // le message. Si le Live rouvre, on le ramène automatiquement où il était.
+    pendingSpecTarget = ST.page;
+    ST.page = null;
+    stopTVCycle();
+    document.body.classList.remove('tv-mode');
     document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-    overlay.style.display = 'flex';
+    if (overlay) overlay.style.display = 'flex';
   }
 }
 function startLiveWatch() {
   stopLiveWatch();
-  unsubLiveWatch = onSnapshot(doc(db, 'petanque', 'status'), { includeMetadataChanges: true }, snap => {
-    if (snap.metadata.fromCache) return; // on ignore les lectures locales potentiellement périmées, on attend la confirmation serveur
+  unsubLiveWatch = onSnapshot(doc(db, 'petanque', 'status'), snap => {
     if (snap.exists()) handleLiveOpenChange(snap.data().liveOpen === true);
   }, () => {});
   liveWatchIv = setInterval(async () => {
@@ -445,8 +387,7 @@ function applyTournamentData(data) {
   ST.phase = data.phase || 'config';
   ST.activePoolRound = data.activePoolRound || 0;
   ST.activeBracketRound = data.activeBracketRound || { P: 0, C: 0 };
-  // liveOpen n'est plus lu depuis ce document : petanque/status (via startLiveWatch)
-  // est l'unique source de vérité pour éviter les courses entre deux écritures séparées.
+  handleLiveOpenChange(data.liveOpen === true);
   ST.registrationOpen = data.registrationOpen === true;
   ST.registrationMax = (data.registrationMax != null && data.registrationMax !== '') ? +data.registrationMax : null;
   updateRegistrationUI();
@@ -479,12 +420,6 @@ window.goTo = function(n) {
   if (USER_ROLE === 'scorer' && n !== 4) n = 4; // le rôle scoreur n'a accès qu'à la saisie des scores en direct
   if (!LIVE_FREE_PAGES.includes(n) && isLiveBlocked()) {
     pendingSpecTarget = n;
-    // Sécurité : si la page actuellement affichée (ex. héritée d'une session
-    // admin/scorer précédente) n'est pas non plus autorisée, on la neutralise
-    // pour qu'elle ne soit jamais visible en dessous de l'overlay.
-    if (!LIVE_FREE_PAGES.includes(ST.page)) {
-      document.querySelectorAll('.page').forEach(p => p.classList.remove('active'));
-    }
     const overlay = document.getElementById('liveClosedOverlay');
     if (overlay) overlay.style.display = 'flex';
     return;
@@ -569,7 +504,16 @@ window.toggleRules = function() {
   ST.rulesOpen = !ST.rulesOpen;
   const el = document.getElementById('rulesModal');
   if (el) el.style.display = ST.rulesOpen ? 'flex' : 'none';
-  if (!ST.rulesOpen) handleLiveOpenChange(ST.liveOpen); // ré-applique immédiatement le verrou si besoin, sans attendre le prochain signal Firestore
+};
+window.closeLiveClosedOverlay = function() {
+  const overlay = document.getElementById('liveClosedOverlay');
+  if (overlay) overlay.style.display = 'none';
+  pendingSpecTarget = null;
+  if (USER_ROLE === 'spectator') {
+    unsubAll();
+    USER_ROLE = null; CURRENT_USER = null; ST.page = 1; ST.regSubmitted = false;
+    showLogin();
+  }
 };
 
 // ═══════════════════════════════════════════════════════════
@@ -2024,7 +1968,6 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
     <div class="login-public-section">
       <div class="login-public-ttl">👥 Espace public</div>
       <div class="login-public-sub">Spectateurs — aucune connexion requise</div>
-      <div id="specPublicMsg" style="font-size:12px;min-height:16px;text-align:center;color:#ffd9a0;margin-bottom:6px"></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
         <button onclick="enterLiveModeAndGo(4)" style="padding:13px 6px;background:rgba(255,80,60,.18);border:1.5px solid rgba(255,120,90,.55);border-radius:10px;color:#fff0ec;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:6px;grid-column:1 / -1"><span class="spec-nav-live-dot"></span> 🔴 Suivre le direct</button>
       </div>
@@ -2061,7 +2004,7 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
     <div style="font-size:40px;margin-bottom:10px">🔴</div>
     <div style="font-family:'Oswald',sans-serif;font-weight:700;margin-bottom:6px">Live actuellement fermé</div>
     <div style="font-size:13px;color:var(--muted);margin-bottom:14px">L'organisateur n'a pas encore ouvert l'accès en direct.</div>
-    <button class="btn btn-ghost btn-sm" onclick="exitLiveClosedToHome()">Fermer</button>
+    <button class="btn btn-ghost btn-sm" onclick="closeLiveClosedOverlay()">Fermer</button>
   </div>
 </div>
 
