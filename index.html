@@ -147,11 +147,11 @@ onAuthStateChanged(auth, async (user) => {
   }
 });
 
-// En PWA (icône ajoutée à l'écran d'accueil) ou dans un navigateur intégré
-// (in-app browser), les popups Google sont bloquées ou tuées par le système :
-// signInWithPopup renvoie alors silencieusement vers l'appli sans connexion.
-// On détecte ces cas et on utilise signInWithRedirect à la place, qui est
-// fiable partout (le retour est traité par getRedirectResult au chargement).
+// signInWithPopup dépend du stockage tiers (cookies/localStorage partagés
+// entre la popup et la page) pour transmettre le résultat : de plus en plus
+// bloqué par Chrome/Safari, ce qui fait échouer silencieusement la connexion
+// (Firebase croit que l'utilisateur a fermé la popup lui-même). On utilise
+// donc systématiquement signInWithRedirect, qui ne dépend pas de ça.
 function isStandaloneOrInApp() {
   const standalone = window.matchMedia('(display-mode: standalone)').matches
     || window.navigator.standalone === true; // iOS PWA
@@ -162,25 +162,26 @@ function isStandaloneOrInApp() {
 window.loginGoogle = async function() {
   const provider = new GoogleAuthProvider();
   try {
-    if (isStandaloneOrInApp()) {
-      showAuthMsg('Redirection vers Google…', 'var(--muted)');
-      await signInWithRedirect(auth, provider);
-      return; // la page va se recharger, la suite est gérée par getRedirectResult
-    }
-    await signInWithPopup(auth, provider);
+    showAuthMsg('Redirection vers Google…', 'var(--muted)');
+    await signInWithRedirect(auth, provider);
+    // la page va se recharger ; la suite est gérée par getRedirectResult ci-dessous
   } catch (e) {
-    if (e.code === 'auth/popup-blocked' || e.code === 'auth/operation-not-supported-in-this-environment') {
-      // Repli automatique sur la redirection si la popup est refusée
-      try { await signInWithRedirect(auth, provider); return; } catch (e2) { showAuthMsg(authErrMsg(e2.code), 'var(--red)'); }
-    } else if (e.code !== 'auth/popup-closed-by-user' && e.code !== 'auth/cancelled-popup-request') {
-      showAuthMsg(authErrMsg(e.code), 'var(--red)');
-    }
+    console.error('loginGoogle', e);
+    showAuthMsg(authErrMsg(e.code) + ' [console: ' + (e.message || e) + ']', 'var(--red)');
   }
 };
-// Traite le retour d'une connexion Google par redirection (PWA / in-app browser).
-// Doit être appelé au chargement, avant/en parallèle de onAuthStateChanged.
-getRedirectResult(auth).catch((e) => {
-  if (e && e.code) showAuthMsg(authErrMsg(e.code), 'var(--red)');
+// Traite le retour d'une connexion Google par redirection.
+// Doit être appelé au chargement. On affiche systématiquement tout code
+// d'erreur (plus rien n'est masqué) pour pouvoir diagnostiquer.
+getRedirectResult(auth).then((result) => {
+  if (result && result.user) {
+    console.log('getRedirectResult OK', result.user.uid, result.user.email);
+  } else {
+    console.log('getRedirectResult: pas de résultat de redirection en attente (chargement normal de la page).');
+  }
+}).catch((e) => {
+  console.error('getRedirectResult', e);
+  showAuthMsg(authErrMsg(e.code) + ' [console: ' + (e.message || e) + ']', 'var(--red)');
 });
 window.loginEmail = async function() {
   const email = document.getElementById('loginEmailInput').value.trim();
