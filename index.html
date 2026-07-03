@@ -165,111 +165,112 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
 <body>
 
 <!-- ══ ÉCRAN DE CONNEXION ══ -->
-<div id="loginScreen">
-  <div class="login-box">
-    <div class="login-brand">🎯 Trophée Pétanque Doublette</div>
-    <div class="login-sub">RSTH</div>
+<div id="loginScreen" style="display:flex;min-height:100vh;align-items:center;justify-content:center;padding:20px;background:linear-gradient(160deg,#062a3d 0%,#0a4a52 45%,#0e6b52 100%);">
+  <div style="background:#0a1f2b;border-radius:18px;padding:30px 26px;max-width:420px;width:100%;box-shadow:0 18px 50px rgba(0,0,0,.35);">
+    <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:24px;color:#8be8d8;text-align:center;margin-bottom:4px;">🎯 Trophée Pétanque Doublette</div>
+    <div style="text-align:center;color:rgba(255,255,255,.55);font-size:13px;margin-bottom:20px;">RSTH</div>
 
-    <div class="login-public-section">
-      <div class="login-public-ttl">👥 Espace public</div>
-      <div class="login-public-sub">Spectateurs — aucune connexion requise</div>
-      <div id="specPublicMsg" style="font-size:12px;min-height:16px;text-align:center;color:#ffd9a0;margin-bottom:6px"></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px">
-        <button onclick="enterLiveModeAndGo(4)" style="padding:13px 6px;background:rgba(255,80,60,.18);border:1.5px solid rgba(255,120,90,.55);border-radius:10px;color:#fff0ec;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:6px;grid-column:1 / -1"><span class="spec-nav-live-dot"></span> 🔴 Suivre le direct</button>
+    <div style="margin-bottom:22px;padding:18px 16px 16px;background:linear-gradient(135deg,#0f8a5f 0%,#0c6b6e 100%);border:1px solid rgba(255,255,255,.16);border-radius:14px;">
+      <div style="text-align:center;font-family:'Oswald',sans-serif;font-weight:700;font-size:12px;letter-spacing:1px;text-transform:uppercase;color:#eafff5;margin-bottom:4px;">👥 Espace public</div>
+      <div style="text-align:center;color:rgba(255,255,255,.7);font-size:12px;margin-bottom:14px;">Spectateurs — aucune connexion requise</div>
+      <div id="specPublicMsg" style="font-size:12px;min-height:16px;text-align:center;color:#ffd9a0;margin-bottom:6px;"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:8px;">
+        <button onclick="enterLiveModeAndGo(4)" style="padding:13px 6px;background:rgba(255,80,60,.18);border:1.5px solid rgba(255,120,90,.55);border-radius:10px;color:#fff0ec;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:6px;grid-column:1 / -1;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#ff3b30;margin-right:4px;animation:blink 1s ease-in-out infinite;"></span> 🔴 Suivre le direct</button>
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px">
-        <button onclick="enterLiveModeAndGo('T')"  style="padding:13px 6px;background:rgba(255,255,255,.14);border:1.5px solid rgba(255,255,255,.3);border-radius:10px;color:#fff;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:5px">👥 ÉQUIPES</button>
-        <button onclick="toggleRulesPublic()"  style="padding:13px 6px;background:rgba(255,255,255,.14);border:1.5px solid rgba(255,255,255,.3);border-radius:10px;color:#fff;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:5px">📋 RÈGLEMENT</button>
-        <button onclick="enterLiveModeAndGo('TV')" style="padding:13px 6px;background:rgba(255,255,255,.14);border:1.5px solid rgba(255,255,255,.3);border-radius:10px;color:#fff;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;display:flex;align-items:center;justify-content:center;gap:5px">📺 ÉCRAN</button>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+        <button onclick="enterLiveModeAndGo('T')" style="padding:13px 6px;background:rgba(255,255,255,.14);border:1.5px solid rgba(255,255,255,.3);border-radius:10px;color:#fff;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;">👥 ÉQUIPES</button>
+        <button onclick="toggleRulesPublic()" style="padding:13px 6px;background:rgba(255,255,255,.14);border:1.5px solid rgba(255,255,255,.3);border-radius:10px;color:#fff;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;">📋 RÈGLEMENT</button>
+        <button onclick="enterLiveModeAndGo('TV')" style="padding:13px 6px;background:rgba(255,255,255,.14);border:1.5px solid rgba(255,255,255,.3);border-radius:10px;color:#fff;font-family:'Oswald',sans-serif;font-size:14px;cursor:pointer;text-transform:uppercase;">📺 ÉCRAN</button>
       </div>
-      <div id="loginRegisterBox" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.25);text-align:center">
-        <button onclick="enterLiveModeAndGo('REG')" style="width:100%;padding:13px 6px;background:rgba(255,255,255,.95);border:1.5px solid #fff;border-radius:10px;color:#134a3d;font-family:'Oswald',sans-serif;font-size:14px;font-weight:700;cursor:pointer;text-transform:uppercase">📝 Inscrire mon équipe</button>
+      <div id="loginRegisterBox" style="display:none;margin-top:14px;padding-top:14px;border-top:1px solid rgba(255,255,255,.25);text-align:center;">
+        <button onclick="enterLiveModeAndGo('REG')" style="width:100%;padding:13px 6px;background:rgba(255,255,255,.95);border:1.5px solid #fff;border-radius:10px;color:#134a3d;font-family:'Oswald',sans-serif;font-size:14px;font-weight:700;cursor:pointer;text-transform:uppercase;">📝 Inscrire mon équipe</button>
       </div>
     </div>
 
-    <div class="login-org-section">
-      <div class="login-org-ttl">🔑 Organisateurs / Scoreurs</div>
-      <div id="authMsg"></div>
-      <button class="btn-google" onclick="loginGoogle()">
+    <div style="padding:18px 16px 4px;background:linear-gradient(135deg,#12395e 0%,#1a4f7e 100%);border:1px solid rgba(255,255,255,.14);border-radius:14px;">
+      <div style="text-align:center;font-family:'Oswald',sans-serif;font-weight:700;font-size:12px;letter-spacing:1px;text-transform:uppercase;color:#cfe6ff;margin-bottom:12px;">🔑 Organisateurs / Scoreurs</div>
+      <div id="authMsg" style="font-size:12px;min-height:16px;margin-bottom:10px;text-align:center;"></div>
+      <button onclick="loginGoogle()" style="display:flex;align-items:center;justify-content:center;gap:10px;width:100%;padding:12px 16px;background:#fff;border:none;border-radius:10px;font-family:'Oswald',sans-serif;font-size:15px;font-weight:600;color:#222;cursor:pointer;letter-spacing:.3px;margin-bottom:4px;transition:box-shadow .15s;">
         <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.33 2.56 13.22l7.98 6.19C12.43 13.08 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-3.59-13.46-8.91l-7.98 6.19C6.51 42.67 14.62 48 24 48z"/></svg>
         Se connecter avec Google
       </button>
-      <div class="login-divider">ou par email / mot de passe</div>
-      <input type="email" id="loginEmailInput" placeholder="Email">
-      <input type="password" id="loginPassInput" placeholder="Mot de passe" onkeydown="if(event.key==='Enter')loginEmail()">
-      <button class="btn btn-b" style="width:100%" onclick="loginEmail()">Se connecter</button>
+      <div style="display:flex;align-items:center;gap:10px;color:rgba(255,255,255,.4);font-size:11px;margin:16px 0;"><div style="flex:1;height:1px;background:rgba(255,255,255,.18);"></div>ou par email / mot de passe<div style="flex:1;height:1px;background:rgba(255,255,255,.18);"></div></div>
+      <input type="email" id="loginEmailInput" placeholder="Email" style="width:100%;padding:9px 10px;border:1px solid rgba(255,255,255,.25);border-radius:8px;font-size:14px;background:rgba(255,255,255,.08);color:#fff;margin-bottom:10px;">
+      <input type="password" id="loginPassInput" placeholder="Mot de passe" style="width:100%;padding:9px 10px;border:1px solid rgba(255,255,255,.25);border-radius:8px;font-size:14px;background:rgba(255,255,255,.08);color:#fff;margin-bottom:10px;" onkeydown="if(event.key==='Enter')loginEmail()">
+      <button onclick="loginEmail()" style="width:100%;border:none;border-radius:8px;padding:9px 16px;font-family:'Oswald',sans-serif;font-weight:600;letter-spacing:.4px;cursor:pointer;font-size:13px;background:var(--brand);color:#fff;">Se connecter</button>
     </div>
   </div>
 </div>
 
 <!-- ══ APPLI PRINCIPALE ══ -->
-<div id="appScreen" style="display:none">
+<div id="appScreen" style="display:none;">
 
-<div id="liveClosedOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:500;align-items:center;justify-content:center;padding:20px">
-  <div style="background:var(--s1);border-radius:14px;padding:24px;max-width:360px;text-align:center">
-    <div style="font-size:40px;margin-bottom:10px">🔴</div>
-    <div style="font-family:'Oswald',sans-serif;font-weight:700;margin-bottom:6px">Live actuellement fermé</div>
-    <div style="font-size:13px;color:var(--muted);margin-bottom:14px">L'organisateur n'a pas encore ouvert l'accès en direct.</div>
-    <button class="btn btn-ghost btn-sm" onclick="exitLiveClosedToHome()">Fermer</button>
+<div id="liveClosedOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.75);z-index:500;align-items:center;justify-content:center;padding:20px;">
+  <div style="background:#fff;border-radius:14px;padding:24px;max-width:360px;text-align:center;">
+    <div style="font-size:40px;margin-bottom:10px;">🔴</div>
+    <div style="font-family:'Oswald',sans-serif;font-weight:700;margin-bottom:6px;">Live actuellement fermé</div>
+    <div style="font-size:13px;color:#7a6a50;margin-bottom:14px;">L'organisateur n'a pas encore ouvert l'accès en direct.</div>
+    <button onclick="exitLiveClosedToHome()" style="border:none;border-radius:8px;padding:7px 13px;font-family:'Oswald',sans-serif;font-weight:600;font-size:12px;cursor:pointer;background:#fff;color:#2b2013;border:1px solid #ddd0ad;">Fermer</button>
   </div>
 </div>
 
-<header class="hdr">
-  <div class="hdr-brand" id="hdrBrandText">🎯 Trophée Pétanque Doublette</div>
-  <span id="roleBadge" class="hdr-desktop-only"></span>
-  <div class="hdr-spacer"></div>
-  <div class="hdr-desktop-only" style="display:flex;gap:8px;align-items:center">
-    <button class="hdr-btn" id="backBtn" style="display:none" onclick="goBack()">← Retour</button>
-    <button class="hdr-btn" id="fwdBtn" style="display:none" onclick="goFwd()">Suivant →</button>
-    <button class="hdr-btn" id="liveBtn" data-role="scorer" onclick="goToLive()" style="display:none">🎯 Live</button>
-    <button class="hdr-btn" id="tvBtn"   data-role="scorer" onclick="goTo('TV')"  style="display:none">📺 Écran</button>
-    <button class="hdr-btn" id="adminBtn" data-role="admin" onclick="toggleAdminPanel()" style="display:none">👑 Admin</button>
-    <button class="hdr-btn" id="logoutBtn" onclick="logout()" style="color:var(--red)">⏻ Quitter</button>
+<header style="position:sticky;top:0;z-index:100;background:#fff;border-bottom:1px solid #ddd0ad;display:flex;align-items:center;gap:10px;padding:10px 16px;flex-wrap:wrap;">
+  <div style="font-family:'Oswald',sans-serif;font-size:18px;font-weight:700;letter-spacing:.5px;color:#9c3509;white-space:nowrap;" id="hdrBrandText">🎯 Trophée Pétanque Doublette</div>
+  <span id="roleBadge" style="font-size:11px;color:#7a6a50;background:#f3ecda;border-radius:14px;padding:4px 10px;"></span>
+  <div style="flex:1;"></div>
+  <div style="display:flex;gap:8px;align-items:center;">
+    <button id="backBtn" style="display:none;background:#f3ecda;border:1px solid #ddd0ad;border-radius:8px;padding:7px 12px;font-family:'Oswald',sans-serif;font-size:12px;cursor:pointer;" onclick="goBack()">← Retour</button>
+    <button id="fwdBtn" style="display:none;background:#f3ecda;border:1px solid #ddd0ad;border-radius:8px;padding:7px 12px;font-family:'Oswald',sans-serif;font-size:12px;cursor:pointer;" onclick="goFwd()">Suivant →</button>
+    <button id="liveBtn" data-role="scorer" style="display:none;background:#f3ecda;border:1px solid #ddd0ad;border-radius:8px;padding:7px 12px;font-family:'Oswald',sans-serif;font-size:12px;cursor:pointer;" onclick="goToLive()">🎯 Live</button>
+    <button id="tvBtn" data-role="scorer" style="display:none;background:#f3ecda;border:1px solid #ddd0ad;border-radius:8px;padding:7px 12px;font-family:'Oswald',sans-serif;font-size:12px;cursor:pointer;" onclick="goTo('TV')">📺 Écran</button>
+    <button id="adminBtn" data-role="admin" style="display:none;background:#f3ecda;border:1px solid #ddd0ad;border-radius:8px;padding:7px 12px;font-family:'Oswald',sans-serif;font-size:12px;cursor:pointer;" onclick="toggleAdminPanel()">👑 Admin</button>
+    <button id="logoutBtn" style="color:#b3402a;background:#f3ecda;border:1px solid #ddd0ad;border-radius:8px;padding:7px 12px;font-family:'Oswald',sans-serif;font-size:12px;cursor:pointer;" onclick="logout()">⏻ Quitter</button>
   </div>
-  <button class="hdr-mobile-toggle" onclick="toggleMobileMenu()">☰</button>
+  <button onclick="toggleMobileMenu()" style="display:none;background:none;border:none;font-size:22px;cursor:pointer;" class="hdr-mobile-toggle">☰</button>
 </header>
-<div class="hdr-drawer-overlay" id="menuOverlay" onclick="closeMobileMenu()"></div>
-<div class="hdr-drawer" id="mobileDrawer">
-  <button class="hdr-drawer-btn" onclick="closeMobileMenu();toggleRules()">📋 Règlement</button>
-  <button class="hdr-drawer-btn" id="drawerLiveBtn"  data-role="scorer" onclick="closeMobileMenu();goToLive()"         style="display:none">🎯 Live</button>
-  <button class="hdr-drawer-btn" id="drawerTvBtn"    data-role="scorer" onclick="closeMobileMenu();goTo('TV')"         style="display:none">📺 Écran</button>
-  <button class="hdr-drawer-btn" id="drawerAdminBtn" data-role="admin"  onclick="closeMobileMenu();toggleAdminPanel()" style="display:none">👑 Admin</button>
-  <button class="hdr-drawer-btn" id="drawerBackBtn"  style="display:none" onclick="closeMobileMenu();goBack()">← Retour</button>
-  <button class="hdr-drawer-btn" id="drawerFwdBtn"   style="display:none" onclick="closeMobileMenu();goFwd()">→ Suivant</button>
-  <div class="hdr-drawer-sep"></div>
-  <button class="hdr-drawer-btn drawer-danger" id="drawerLogoutBtn" onclick="closeMobileMenu();logout()">⏻ Quitter</button>
+
+<div id="menuOverlay" style="display:none;position:fixed;inset:0;z-index:298;" onclick="closeMobileMenu()"></div>
+<div id="mobileDrawer" style="display:none;position:fixed;top:58px;right:0;width:230px;background:#241a10;border-radius:0 0 0 14px;box-shadow:-4px 8px 28px rgba(0,0,0,.35);z-index:299;flex-direction:column;padding:8px;gap:4px;">
+  <button onclick="closeMobileMenu();toggleRules()" style="background:none;border:none;color:#f0e4d4;padding:12px 14px;border-radius:8px;cursor:pointer;font-family:'Oswald',sans-serif;font-size:14px;text-align:left;width:100%;">📋 Règlement</button>
+  <button id="drawerLiveBtn" data-role="scorer" style="display:none;background:none;border:none;color:#f0e4d4;padding:12px 14px;border-radius:8px;cursor:pointer;font-family:'Oswald',sans-serif;font-size:14px;text-align:left;width:100%;" onclick="closeMobileMenu();goToLive()">🎯 Live</button>
+  <button id="drawerTvBtn" data-role="scorer" style="display:none;background:none;border:none;color:#f0e4d4;padding:12px 14px;border-radius:8px;cursor:pointer;font-family:'Oswald',sans-serif;font-size:14px;text-align:left;width:100%;" onclick="closeMobileMenu();goTo('TV')">📺 Écran</button>
+  <button id="drawerAdminBtn" data-role="admin" style="display:none;background:none;border:none;color:#f0e4d4;padding:12px 14px;border-radius:8px;cursor:pointer;font-family:'Oswald',sans-serif;font-size:14px;text-align:left;width:100%;" onclick="closeMobileMenu();toggleAdminPanel()">👑 Admin</button>
+  <button id="drawerBackBtn" style="display:none;background:none;border:none;color:#f0e4d4;padding:12px 14px;border-radius:8px;cursor:pointer;font-family:'Oswald',sans-serif;font-size:14px;text-align:left;width:100%;" onclick="closeMobileMenu();goBack()">← Retour</button>
+  <button id="drawerFwdBtn" style="display:none;background:none;border:none;color:#f0e4d4;padding:12px 14px;border-radius:8px;cursor:pointer;font-family:'Oswald',sans-serif;font-size:14px;text-align:left;width:100%;" onclick="closeMobileMenu();goFwd()">→ Suivant</button>
+  <div style="height:1px;background:rgba(255,255,255,.12);margin:4px 0;"></div>
+  <button id="drawerLogoutBtn" style="color:#ff8070;background:none;border:none;padding:12px 14px;border-radius:8px;cursor:pointer;font-family:'Oswald',sans-serif;font-size:14px;text-align:left;width:100%;" onclick="closeMobileMenu();logout()">⏻ Quitter</button>
 </div>
 
 <!-- ══ PANNEAU ADMIN ══ -->
-<div id="adminPanel">
-  <div class="wrap" style="padding:0 16px">
-    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:12px 0 10px">
-      <button id="liveToggleBtn" class="btn btn-sm" onclick="toggleLiveOpen()">🔴 Live fermé</button>
-      <button id="registrationToggleBtn" class="btn btn-sm" onclick="toggleRegistrationOpen()">🔴 Inscriptions fermées (public)</button>
-      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:var(--muted)">Max en ligne
-        <input type="number" id="registrationMaxInput" min="0" placeholder="= total" style="width:64px;padding:6px 8px" onchange="saveRegistrationMax()">
+<div id="adminPanel" style="display:none;background:#f3ecda;border-bottom:2px solid #c4b386;padding:14px 16px;">
+  <div style="max-width:1100px;margin:0 auto;padding:0 16px;">
+    <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;padding:12px 0 10px;">
+      <button id="liveToggleBtn" onclick="toggleLiveOpen()" style="border:none;border-radius:8px;padding:7px 13px;font-family:'Oswald',sans-serif;font-weight:600;font-size:12px;cursor:pointer;background:#f3ecda;border:1px solid #b3402a;color:#b3402a;">🔴 Live fermé</button>
+      <button id="registrationToggleBtn" onclick="toggleRegistrationOpen()" style="border:none;border-radius:8px;padding:7px 13px;font-family:'Oswald',sans-serif;font-weight:600;font-size:12px;cursor:pointer;background:#f3ecda;border:1px solid #b3402a;color:#b3402a;">🔴 Inscriptions fermées (public)</button>
+      <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#7a6a50;">Max en ligne
+        <input type="number" id="registrationMaxInput" min="0" placeholder="= total" style="width:64px;padding:6px 8px;border:1px solid #ddd0ad;border-radius:8px;font-size:14px;background:#fff;color:#2b2013;" onchange="saveRegistrationMax()">
       </label>
-      <button class="btn btn-b btn-sm" onclick="toggleAdminPanel();goTo('TV')">📺 Mode Écran</button>
-      <button class="btn btn-ghost btn-sm" onclick="printPlanning()">🖨 Planning</button>
-      <button class="btn btn-ghost btn-sm" onclick="resetAllScores()" style="color:var(--red)">♻️ Réinitialiser scores</button>
-      <button class="btn btn-ghost btn-sm" onclick="newTournament()" style="color:var(--red)">🆕 Nouveau tournoi</button>
+      <button onclick="toggleAdminPanel();goTo('TV')" style="border:none;border-radius:8px;padding:7px 13px;font-family:'Oswald',sans-serif;font-weight:600;font-size:12px;cursor:pointer;background:#c1440e;color:#fff;">📺 Mode Écran</button>
+      <button onclick="printPlanning()" style="border:none;border-radius:8px;padding:7px 13px;font-family:'Oswald',sans-serif;font-weight:600;font-size:12px;cursor:pointer;background:#fff;color:#4a3a22;border:1px solid #ddd0ad;">🖨 Planning</button>
+      <button onclick="resetAllScores()" style="border:none;border-radius:8px;padding:7px 13px;font-family:'Oswald',sans-serif;font-weight:600;font-size:12px;cursor:pointer;background:#fff;color:#b3402a;border:1px solid #ddd0ad;">♻️ Réinitialiser scores</button>
+      <button onclick="newTournament()" style="border:none;border-radius:8px;padding:7px 13px;font-family:'Oswald',sans-serif;font-weight:600;font-size:12px;cursor:pointer;background:#fff;color:#b3402a;border:1px solid #ddd0ad;">🆕 Nouveau tournoi</button>
     </div>
-    <div class="card" style="margin-bottom:10px">
-      <div class="card-ttl">📝 Inscriptions publiques en attente <span id="registrationsCount" style="color:var(--brand)"></span></div>
+    <div style="background:#fff;border:1px solid #ddd0ad;border-radius:12px;padding:16px;margin-bottom:10px;">
+      <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:15px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">📝 Inscriptions publiques en attente <span id="registrationsCount" style="color:#c1440e;"></span></div>
       <div id="registrationsListEl"></div>
     </div>
-    <div class="card" style="margin-bottom:10px">
-      <div class="card-ttl">👥 Gestion du staff</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr auto auto;gap:8px;margin-bottom:10px;align-items:end">
-        <div><label>Email</label><input type="email" id="newUserEmail" placeholder="scorer@email.com"></div>
-        <div><label>Mot de passe</label><input type="password" id="newUserPass" placeholder="••••••••"></div>
-        <div><label>Rôle</label>
-          <select id="newUserRole" style="padding:9px 8px">
+    <div style="background:#fff;border:1px solid #ddd0ad;border-radius:12px;padding:16px;margin-bottom:10px;">
+      <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:15px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">👥 Gestion du staff</div>
+      <div style="display:grid;grid-template-columns:1fr 1fr auto auto;gap:8px;margin-bottom:10px;align-items:end;">
+        <div><label style="font-size:12px;color:#7a6a50;display:block;margin-bottom:4px;">Email</label><input type="email" id="newUserEmail" placeholder="scorer@email.com" style="width:100%;padding:9px 10px;border:1px solid #ddd0ad;border-radius:8px;font-size:14px;background:#fff;color:#2b2013;"></div>
+        <div><label style="font-size:12px;color:#7a6a50;display:block;margin-bottom:4px;">Mot de passe</label><input type="password" id="newUserPass" placeholder="••••••••" style="width:100%;padding:9px 10px;border:1px solid #ddd0ad;border-radius:8px;font-size:14px;background:#fff;color:#2b2013;"></div>
+        <div><label style="font-size:12px;color:#7a6a50;display:block;margin-bottom:4px;">Rôle</label>
+          <select id="newUserRole" style="width:100%;padding:9px 8px;border:1px solid #ddd0ad;border-radius:8px;font-size:14px;background:#fff;color:#2b2013;">
             <option value="scorer">🎯 Scorer</option>
             <option value="admin">👑 Admin</option>
           </select>
         </div>
-        <div style="padding-top:16px"><button class="btn btn-b btn-sm" onclick="adminCreateUser()">+ Créer</button></div>
+        <div style="padding-top:16px;"><button onclick="adminCreateUser()" style="border:none;border-radius:8px;padding:7px 13px;font-family:'Oswald',sans-serif;font-weight:600;font-size:12px;cursor:pointer;background:#c1440e;color:#fff;">+ Créer</button></div>
       </div>
       <div id="userListEl"></div>
     </div>
@@ -277,62 +278,62 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
 </div>
 
 <!-- ══ NAV SPECTATEUR ══ -->
-<nav class="spec-nav" id="specNav">
-  <button class="spec-nav-btn spec-nav-active" data-target="4" onclick="spectatorGoLive(4)"><span class="spec-nav-live-dot"></span> Live</button>
-  <button class="spec-nav-btn" data-target="5" onclick="spectatorGoLive(5)">🏆 Classement</button>
-  <button class="spec-nav-btn" data-target="T" onclick="spectatorGoLive('T')">👥 Équipes</button>
-  <button class="spec-nav-btn" id="specNavRegBtn" data-target="REG" style="display:none" onclick="spectatorGoLive('REG')">📝 Inscription</button>
-  <button class="spec-nav-btn" data-target="TV" onclick="spectatorGoLive('TV')">📺 Écran</button>
-  <button class="spec-nav-btn" onclick="toggleRules()">📋 Règlement</button>
-  <button class="spec-nav-btn" onclick="logout()" style="margin-left:auto;color:var(--red)">🔑 Connexion Staff</button>
+<nav id="specNav" style="display:flex;gap:6px;padding:8px 16px;background:#f3ecda;overflow-x:auto;">
+  <button data-target="4" onclick="spectatorGoLive(4)" style="background:#c1440e;color:#fff;border:1px solid #c1440e;border-radius:20px;padding:7px 14px;font-family:'Oswald',sans-serif;font-size:12px;cursor:pointer;white-space:nowrap;"><span style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#ff3b30;margin-right:4px;animation:blink 1s ease-in-out infinite;"></span> Live</button>
+  <button data-target="5" onclick="spectatorGoLive(5)" style="background:#fff;border:1px solid #ddd0ad;border-radius:20px;padding:7px 14px;font-family:'Oswald',sans-serif;font-size:12px;cursor:pointer;white-space:nowrap;">🏆 Classement</button>
+  <button data-target="T" onclick="spectatorGoLive('T')" style="background:#fff;border:1px solid #ddd0ad;border-radius:20px;padding:7px 14px;font-family:'Oswald',sans-serif;font-size:12px;cursor:pointer;white-space:nowrap;">👥 Équipes</button>
+  <button id="specNavRegBtn" data-target="REG" style="display:none;background:#fff;border:1px solid #ddd0ad;border-radius:20px;padding:7px 14px;font-family:'Oswald',sans-serif;font-size:12px;cursor:pointer;white-space:nowrap;" onclick="spectatorGoLive('REG')">📝 Inscription</button>
+  <button data-target="TV" onclick="spectatorGoLive('TV')" style="background:#fff;border:1px solid #ddd0ad;border-radius:20px;padding:7px 14px;font-family:'Oswald',sans-serif;font-size:12px;cursor:pointer;white-space:nowrap;">📺 Écran</button>
+  <button onclick="toggleRules()" style="background:#fff;border:1px solid #ddd0ad;border-radius:20px;padding:7px 14px;font-family:'Oswald',sans-serif;font-size:12px;cursor:pointer;white-space:nowrap;">📋 Règlement</button>
+  <button onclick="logout()" style="margin-left:auto;color:#b3402a;background:#fff;border:1px solid #ddd0ad;border-radius:20px;padding:7px 14px;font-family:'Oswald',sans-serif;font-size:12px;cursor:pointer;white-space:nowrap;">🔑 Connexion Staff</button>
 </nav>
 
 <!-- ══ NAV STEPS (admin) ══ -->
-<nav class="steps" id="stepNav">
-  <div class="step active" data-s="1" onclick="goTo(1)"><div class="step-n">1</div><span>Config</span></div>
-  <div class="step-ln"></div>
-  <div class="step" data-s="2" onclick="goTo(2)"><div class="step-n">2</div><span>Équipes</span></div>
-  <div class="step-ln"></div>
-  <div class="step" data-s="3" onclick="goTo(3)"><div class="step-n">3</div><span>Planning</span></div>
-  <div class="step-ln"></div>
-  <div class="step" data-s="4" onclick="goTo(4)"><div class="step-n">4</div><span>Tournoi</span></div>
-  <div class="step-ln"></div>
-  <div class="step" data-s="5" onclick="goTo(5)"><div class="step-n">5</div><span>Classement</span></div>
+<nav id="stepNav" style="display:flex;align-items:center;padding:10px 16px;background:#fff;border-bottom:1px solid #ddd0ad;overflow-x:auto;">
+  <div data-s="1" onclick="goTo(1)" style="display:flex;align-items:center;gap:6px;font-size:12px;color:#c1440e;font-weight:700;cursor:pointer;white-space:nowrap;"><div style="width:22px;height:22px;border-radius:50%;background:#c1440e;display:flex;align-items:center;justify-content:center;font-size:11px;color:#fff;">1</div><span>Config</span></div>
+  <div style="width:24px;height:1px;background:#ddd0ad;margin:0 6px;"></div>
+  <div data-s="2" onclick="goTo(2)" style="display:flex;align-items:center;gap:6px;font-size:12px;color:#9c8a6c;cursor:pointer;white-space:nowrap;"><div style="width:22px;height:22px;border-radius:50%;background:#e8dcc0;display:flex;align-items:center;justify-content:center;font-size:11px;">2</div><span>Équipes</span></div>
+  <div style="width:24px;height:1px;background:#ddd0ad;margin:0 6px;"></div>
+  <div data-s="3" onclick="goTo(3)" style="display:flex;align-items:center;gap:6px;font-size:12px;color:#9c8a6c;cursor:pointer;white-space:nowrap;"><div style="width:22px;height:22px;border-radius:50%;background:#e8dcc0;display:flex;align-items:center;justify-content:center;font-size:11px;">3</div><span>Planning</span></div>
+  <div style="width:24px;height:1px;background:#ddd0ad;margin:0 6px;"></div>
+  <div data-s="4" onclick="goTo(4)" style="display:flex;align-items:center;gap:6px;font-size:12px;color:#9c8a6c;cursor:pointer;white-space:nowrap;"><div style="width:22px;height:22px;border-radius:50%;background:#e8dcc0;display:flex;align-items:center;justify-content:center;font-size:11px;">4</div><span>Tournoi</span></div>
+  <div style="width:24px;height:1px;background:#ddd0ad;margin:0 6px;"></div>
+  <div data-s="5" onclick="goTo(5)" style="display:flex;align-items:center;gap:6px;font-size:12px;color:#9c8a6c;cursor:pointer;white-space:nowrap;"><div style="width:22px;height:22px;border-radius:50%;background:#e8dcc0;display:flex;align-items:center;justify-content:center;font-size:11px;">5</div><span>Classement</span></div>
 </nav>
 
 <!-- ══ PAGE 1 — CONFIG ══ -->
-<div class="page" id="page1">
-<div class="wrap">
-  <div class="sec-ttl">⚙️ Configuration du tournoi</div>
-  <div class="card">
-    <div class="card-ttl">🎯 Identité</div>
-    <div class="field-grid">
-      <div><label>Nom du tournoi</label><input type="text" id="cfgName" onchange="onCfgChange()"></div>
-      <div><label>Club organisateur</label><input type="text" id="cfgClub" onchange="onCfgChange()"></div>
+<div class="page active" id="page1">
+<div style="max-width:1100px;margin:0 auto;padding:16px;">
+  <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:20px;color:#4a3a22;margin:18px 0 10px;">⚙️ Configuration du tournoi</div>
+  <div style="background:#fff;border:1px solid #ddd0ad;border-radius:12px;padding:16px;margin-bottom:14px;">
+    <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:15px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">🎯 Identité</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:14px;">
+      <div><label style="font-size:12px;color:#7a6a50;display:block;margin-bottom:4px;">Nom du tournoi</label><input type="text" id="cfgName" style="width:100%;padding:9px 10px;border:1px solid #ddd0ad;border-radius:8px;font-size:14px;background:#fff;color:#2b2013;" onchange="onCfgChange()"></div>
+      <div><label style="font-size:12px;color:#7a6a50;display:block;margin-bottom:4px;">Club organisateur</label><input type="text" id="cfgClub" style="width:100%;padding:9px 10px;border:1px solid #ddd0ad;border-radius:8px;font-size:14px;background:#fff;color:#2b2013;" onchange="onCfgChange()"></div>
     </div>
   </div>
-  <div class="card">
-    <div class="card-ttl">🏟️ Effectif & Terrains</div>
-    <div class="field-grid">
-      <div><label>Nombre d'équipes (doublettes) — 16 à 64</label><input type="number" id="cfgN" min="16" max="64" onchange="onCfgChange()"></div>
-      <div><label>Terrains disponibles — 8 à 32</label><input type="number" id="cfgCourts" min="8" max="32" onchange="onCfgChange()"></div>
-      <div><label>Durée d'une partie (min)</label><input type="number" id="cfgMt" min="20" max="90" onchange="onCfgChange()"></div>
-      <div><label>Battement entre parties (min)</label><input type="number" id="cfgTt" min="0" max="30" onchange="onCfgChange()"></div>
-      <div><label>Heure de début</label><input type="time" id="cfgStart" onchange="onCfgChange()"></div>
+  <div style="background:#fff;border:1px solid #ddd0ad;border-radius:12px;padding:16px;margin-bottom:14px;">
+    <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:15px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">🏟️ Effectif & Terrains</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:14px;">
+      <div><label style="font-size:12px;color:#7a6a50;display:block;margin-bottom:4px;">Nombre d'équipes (doublettes) — 16 à 64</label><input type="number" id="cfgN" min="16" max="64" style="width:100%;padding:9px 10px;border:1px solid #ddd0ad;border-radius:8px;font-size:14px;background:#fff;color:#2b2013;" onchange="onCfgChange()"></div>
+      <div><label style="font-size:12px;color:#7a6a50;display:block;margin-bottom:4px;">Terrains disponibles — 8 à 32</label><input type="number" id="cfgCourts" min="8" max="32" style="width:100%;padding:9px 10px;border:1px solid #ddd0ad;border-radius:8px;font-size:14px;background:#fff;color:#2b2013;" onchange="onCfgChange()"></div>
+      <div><label style="font-size:12px;color:#7a6a50;display:block;margin-bottom:4px;">Durée d'une partie (min)</label><input type="number" id="cfgMt" min="20" max="90" style="width:100%;padding:9px 10px;border:1px solid #ddd0ad;border-radius:8px;font-size:14px;background:#fff;color:#2b2013;" onchange="onCfgChange()"></div>
+      <div><label style="font-size:12px;color:#7a6a50;display:block;margin-bottom:4px;">Battement entre parties (min)</label><input type="number" id="cfgTt" min="0" max="30" style="width:100%;padding:9px 10px;border:1px solid #ddd0ad;border-radius:8px;font-size:14px;background:#fff;color:#2b2013;" onchange="onCfgChange()"></div>
+      <div><label style="font-size:12px;color:#7a6a50;display:block;margin-bottom:4px;">Heure de début</label><input type="time" id="cfgStart" style="width:100%;padding:9px 10px;border:1px solid #ddd0ad;border-radius:8px;font-size:14px;background:#fff;color:#2b2013;" onchange="onCfgChange()"></div>
     </div>
   </div>
-  <div class="card">
-    <div class="card-ttl">🍽️ Pauses programmées (déjeuner, café…)</div>
-    <div id="pausesEditorEl" style="margin-bottom:10px"></div>
-    <button class="btn btn-ghost btn-sm" onclick="addPauseRow()">➕ Ajouter une pause</button>
+  <div style="background:#fff;border:1px solid #ddd0ad;border-radius:12px;padding:16px;margin-bottom:14px;">
+    <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:15px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">🍽️ Pauses programmées (déjeuner, café…)</div>
+    <div id="pausesEditorEl" style="margin-bottom:10px;"></div>
+    <button onclick="addPauseRow()" style="border:none;border-radius:8px;padding:7px 13px;font-family:'Oswald',sans-serif;font-weight:600;font-size:12px;cursor:pointer;background:#fff;color:#4a3a22;border:1px solid #ddd0ad;">➕ Ajouter une pause</button>
   </div>
-  <div class="card">
-    <div class="card-ttl">🏅 Règles du score</div>
-    <div class="field-grid">
-      <div><label>Score maximum (pts)</label><input type="number" id="cfgScoreMax" min="11" max="25" onchange="onCfgChange()"></div>
-      <div><label>Écart minimum pour victoire (pts)</label><input type="number" id="cfgEcart" min="1" max="3" onchange="onCfgChange()"></div>
-      <div><label>Répartition des groupes Phase 1</label>
-        <select id="cfgBalance" onchange="onCfgChange()">
+  <div style="background:#fff;border:1px solid #ddd0ad;border-radius:12px;padding:16px;margin-bottom:14px;">
+    <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:15px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">🏅 Règles du score</div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(160px,1fr));gap:12px;margin-bottom:14px;">
+      <div><label style="font-size:12px;color:#7a6a50;display:block;margin-bottom:4px;">Score maximum (pts)</label><input type="number" id="cfgScoreMax" min="11" max="25" style="width:100%;padding:9px 10px;border:1px solid #ddd0ad;border-radius:8px;font-size:14px;background:#fff;color:#2b2013;" onchange="onCfgChange()"></div>
+      <div><label style="font-size:12px;color:#7a6a50;display:block;margin-bottom:4px;">Écart minimum pour victoire (pts)</label><input type="number" id="cfgEcart" min="1" max="3" style="width:100%;padding:9px 10px;border:1px solid #ddd0ad;border-radius:8px;font-size:14px;background:#fff;color:#2b2013;" onchange="onCfgChange()"></div>
+      <div><label style="font-size:12px;color:#7a6a50;display:block;margin-bottom:4px;">Répartition des groupes Phase 1</label>
+        <select id="cfgBalance" style="width:100%;padding:9px 10px;border:1px solid #ddd0ad;border-radius:8px;font-size:14px;background:#fff;color:#2b2013;" onchange="onCfgChange()">
           <option value="level">Par niveau (têtes de série)</option>
           <option value="random">Tirage au sort pur</option>
         </select>
@@ -340,9 +341,9 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
     </div>
   </div>
   <div id="cfgSummary"></div>
-  <div class="card">
-    <div class="card-ttl">📜 Format du tournoi</div>
-    <div style="font-size:13px;line-height:1.8;color:var(--ink2)">
+  <div style="background:#fff;border:1px solid #ddd0ad;border-radius:12px;padding:16px;margin-bottom:14px;">
+    <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:15px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">📜 Format du tournoi</div>
+    <div style="font-size:13px;line-height:1.8;color:#4a3a22;">
       <strong>Phase 1 — Poules de 4 :</strong> chaque équipe affronte toutes les autres de son groupe. Score max <span id="ruleScoreMax">13</span> pts avec <span id="ruleEcart">2</span> pts d'écart minimum.<br>
       <strong>Tiebreakers :</strong> 1) Victoires · 2) Confrontation directe · 3) Goal-average général · 4) Points marqués.<br>
       <strong>Phase 2 — Qualification :</strong> les 1ers et 2es de chaque groupe → tableau <strong>Principale</strong> ; les 3es et 4es → tableau <strong>Consolante</strong>.<br>
@@ -350,153 +351,153 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
       <strong>Classement final :</strong> tableau Principale en tête, puis Consolante.
     </div>
   </div>
-  <button class="btn btn-b" onclick="saveCfgAndNext()">Suivant : Équipes →</button>
+  <button onclick="saveCfgAndNext()" style="border:none;border-radius:8px;padding:9px 16px;font-family:'Oswald',sans-serif;font-weight:600;letter-spacing:.4px;cursor:pointer;font-size:13px;background:#c1440e;color:#fff;">Suivant : Équipes →</button>
 </div>
 </div>
 
 <!-- ══ PAGE 2 — ÉQUIPES ══ -->
 <div class="page" id="page2">
-<div class="wrap">
-  <div class="sec-ttl">👥 Équipes (doublettes)</div>
-  <div id="teamsCounter" style="margin-bottom:10px"></div>
-  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px">
-    <button class="btn btn-b btn-sm" onclick="openEditTeam(null)">+ Ajouter une équipe</button>
-    <button class="btn btn-ghost btn-sm" onclick="autoFillTeams()">⚡ Compléter automatiquement</button>
-    <button class="btn btn-ghost btn-sm" onclick="clearTeams()" style="color:var(--red)">🗑️ Vider la liste</button>
+<div style="max-width:1100px;margin:0 auto;padding:16px;">
+  <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:20px;color:#4a3a22;margin:18px 0 10px;">👥 Équipes (doublettes)</div>
+  <div id="teamsCounter" style="margin-bottom:10px;"></div>
+  <div style="display:flex;gap:8px;flex-wrap:wrap;margin-bottom:14px;">
+    <button onclick="openEditTeam(null)" style="border:none;border-radius:8px;padding:7px 13px;font-family:'Oswald',sans-serif;font-weight:600;font-size:12px;cursor:pointer;background:#c1440e;color:#fff;">+ Ajouter une équipe</button>
+    <button onclick="autoFillTeams()" style="border:none;border-radius:8px;padding:7px 13px;font-family:'Oswald',sans-serif;font-weight:600;font-size:12px;cursor:pointer;background:#fff;color:#4a3a22;border:1px solid #ddd0ad;">⚡ Compléter automatiquement</button>
+    <button onclick="clearTeams()" style="border:none;border-radius:8px;padding:7px 13px;font-family:'Oswald',sans-serif;font-weight:600;font-size:12px;cursor:pointer;background:#fff;color:#b3402a;border:1px solid #ddd0ad;">🗑️ Vider la liste</button>
   </div>
   <div id="teamsListEl"></div>
-  <button class="btn btn-b" id="teamsNextBtn" style="margin-top:16px" onclick="goToPlanningFromTeams()">Suivant : Planning →</button>
+  <button id="teamsNextBtn" style="margin-top:16px;border:none;border-radius:8px;padding:9px 16px;font-family:'Oswald',sans-serif;font-weight:600;letter-spacing:.4px;cursor:pointer;font-size:13px;background:#c1440e;color:#fff;" onclick="goToPlanningFromTeams()">Suivant : Planning →</button>
 </div>
 </div>
 
 <!-- ══ PAGE 3 — PLANNING ══ -->
 <div class="page" id="page3">
-<div class="wrap">
-  <div class="sec-ttl">📋 Planning Phase 1</div>
+<div style="max-width:1100px;margin:0 auto;padding:16px;">
+  <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:20px;color:#4a3a22;margin:18px 0 10px;">📋 Planning Phase 1</div>
   <div id="planningPreviewEl"></div>
 </div>
 </div>
 
 <!-- ══ PAGE 4 — TOURNOI EN DIRECT ══ -->
 <div class="page" id="page4">
-<div class="wrap">
-  <div class="sec-ttl">🎯 Tournoi en direct</div>
-  <div id="page4Tabs" style="display:none;gap:8px;margin-bottom:14px;flex-wrap:wrap">
-    <button class="btn btn-ghost btn-sm" id="tabPoolsBtn" onclick="setPage4View('pools')">📋 Phase 1 — Poules</button>
-    <button class="btn btn-ghost btn-sm" id="tabBracketsBtn" onclick="setPage4View('bracket')">🏆 Phase 2 — Tableaux</button>
+<div style="max-width:1100px;margin:0 auto;padding:16px;">
+  <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:20px;color:#4a3a22;margin:18px 0 10px;">🎯 Tournoi en direct</div>
+  <div id="page4Tabs" style="display:none;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
+    <button id="tabPoolsBtn" onclick="setPage4View('pools')" style="border:none;border-radius:8px;padding:7px 13px;font-family:'Oswald',sans-serif;font-weight:600;font-size:12px;cursor:pointer;background:#fff;color:#4a3a22;border:1px solid #ddd0ad;">📋 Phase 1 — Poules</button>
+    <button id="tabBracketsBtn" onclick="setPage4View('bracket')" style="border:none;border-radius:8px;padding:7px 13px;font-family:'Oswald',sans-serif;font-weight:600;font-size:12px;cursor:pointer;background:#fff;color:#4a3a22;border:1px solid #ddd0ad;">🏆 Phase 2 — Tableaux</button>
   </div>
 
   <div id="poolsView">
-    <div class="rtabs ovx" id="poolRoundTabs"></div>
+    <div id="poolRoundTabs" style="overflow-x:auto;"></div>
     <div id="poolMatchListEl"></div>
-    <div class="card" style="margin-top:18px">
-      <div class="card-ttl">
+    <div style="background:#fff;border:1px solid #ddd0ad;border-radius:12px;padding:16px;margin-top:18px;">
+      <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:15px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">
         <span>📊 Classements des groupes</span>
-        <button class="btn btn-b btn-xs" id="buildBracketsBtn" data-role="admin" onclick="buildBrackets()">2️⃣ Composer les tableaux (Phase 2)</button>
+        <button id="buildBracketsBtn" data-role="admin" onclick="buildBrackets()" style="border:none;border-radius:8px;padding:5px 10px;font-family:'Oswald',sans-serif;font-weight:600;font-size:11px;cursor:pointer;background:#c1440e;color:#fff;">2️⃣ Composer les tableaux (Phase 2)</button>
       </div>
       <div id="poolStandingsPanel"></div>
     </div>
   </div>
 
-  <div id="bracketsView" style="display:none">
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:18px">
-      <div class="card" id="bracketCol_P">
-        <div class="card-ttl"><span>🏆 Tableau Principale</span></div>
-        <div class="rtabs ovx" id="bracketRoundTabs_P"></div>
+  <div id="bracketsView" style="display:none;">
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(360px,1fr));gap:18px;">
+      <div id="bracketCol_P" style="background:#fff;border:1px solid #ddd0ad;border-radius:12px;padding:16px;">
+        <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:15px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;"><span>🏆 Tableau Principale</span></div>
+        <div id="bracketRoundTabs_P" style="overflow-x:auto;"></div>
         <div id="bracketMatchList_P"></div>
       </div>
-      <div class="card" id="bracketCol_C">
-        <div class="card-ttl"><span>🥈 Tableau Consolante</span></div>
-        <div class="rtabs ovx" id="bracketRoundTabs_C"></div>
+      <div id="bracketCol_C" style="background:#fff;border:1px solid #ddd0ad;border-radius:12px;padding:16px;">
+        <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:15px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;"><span>🥈 Tableau Consolante</span></div>
+        <div id="bracketRoundTabs_C" style="overflow-x:auto;"></div>
         <div id="bracketMatchList_C"></div>
       </div>
     </div>
-    <button class="btn btn-b" id="btnGoFinal" style="margin-top:16px;display:none" onclick="goTo(5)">🥇 Voir le classement final →</button>
+    <button id="btnGoFinal" style="margin-top:16px;display:none;border:none;border-radius:8px;padding:9px 16px;font-family:'Oswald',sans-serif;font-weight:600;letter-spacing:.4px;cursor:pointer;font-size:13px;background:#c1440e;color:#fff;" onclick="goTo(5)">🥇 Voir le classement final →</button>
   </div>
 </div>
 </div>
 
 <!-- ══ PAGE 5 — CLASSEMENT FINAL ══ -->
 <div class="page" id="page5">
-<div class="wrap">
-  <div class="sec-ttl">🥇 Classement Final</div>
+<div style="max-width:1100px;margin:0 auto;padding:16px;">
+  <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:20px;color:#4a3a22;margin:18px 0 10px;">🥇 Classement Final</div>
   <div id="finalRankingTable"></div>
 </div>
 </div>
 
 <!-- ══ PAGE T — ÉQUIPES (spectateur) ══ -->
 <div class="page" id="pageT">
-<div class="wrap">
-  <div class="sec-ttl">👥 Équipes engagées</div>
+<div style="max-width:1100px;margin:0 auto;padding:16px;">
+  <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:20px;color:#4a3a22;margin:18px 0 10px;">👥 Équipes engagées</div>
   <div id="teamsSpecListEl"></div>
 </div>
 </div>
 
-<!-- ══ PAGE REG — INSCRIPTION PUBLIQUE D'UNE ÉQUIPE ══ -->
+<!-- ══ PAGE REG — INSCRIPTION PUBLIQUE ══ -->
 <div class="page" id="pageREG">
-<div class="wrap">
-  <div class="sec-ttl">📝 Inscrire mon équipe</div>
+<div style="max-width:1100px;margin:0 auto;padding:16px;">
+  <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:20px;color:#4a3a22;margin:18px 0 10px;">📝 Inscrire mon équipe</div>
   <div id="regPageBody"></div>
 </div>
 </div>
 
-<!-- ══ PAGE TV — GRAND ÉCRAN ══ -->
+<!-- ══ PAGE TV ══ -->
 <div class="page" id="pageTV">
-  <div class="tv-hdr">
-    <div class="tv-brand">🎯 Trophée Pétanque Doublette</div>
-    <div class="tv-phase-badge" id="tvPhaseBadge">—</div>
-    <div class="tv-clock" id="tvClock">--:--:--</div>
+  <div style="display:flex;align-items:center;gap:18px;padding:clamp(10px,2vh,22px) clamp(16px,3vw,40px);border-bottom:2px solid rgba(255,255,255,.12);flex-wrap:wrap;flex-shrink:0;">
+    <div style="font-family:'Oswald',sans-serif;font-weight:700;letter-spacing:1px;font-size:clamp(18px,2.4vw,30px);">🎯 Trophée Pétanque Doublette</div>
+    <div id="tvPhaseBadge" style="background:rgba(255,255,255,.1);border:1px solid rgba(255,255,255,.25);border-radius:30px;padding:6px 16px;font-size:clamp(12px,1.3vw,16px);font-family:'Oswald',sans-serif;letter-spacing:.6px;">—</div>
+    <div id="tvClock" style="margin-left:auto;font-family:'Oswald',sans-serif;font-size:clamp(20px,2.6vw,34px);font-weight:700;font-variant-numeric:tabular-nums;color:#7affa0;">--:--:--</div>
   </div>
-  <div class="tv-sub-ttl" id="tvSubTitle">Résultats en direct</div>
-  <div class="tv-body" id="tvContent"></div>
-  <div class="tv-bar" id="tvControlBar">
-    <button onclick="tvExit()">← Retour</button>
-    <label>Affichage
-      <select id="tvModeSelect" onchange="tvSetMode(this.value)">
-        <option value="results">Résultats</option>
-        <option value="standings">Classement</option>
-        <option value="cycle">Alterné</option>
+  <div id="tvSubTitle" style="text-align:center;font-family:'Oswald',sans-serif;font-size:clamp(20px,3vw,40px);letter-spacing:1px;color:#ffd27a;padding:clamp(10px,2vh,18px) 0 4px;flex-shrink:0;">Résultats en direct</div>
+  <div id="tvContent" style="flex:1;padding:0 clamp(16px,4vw,60px) 90px;overflow-y:auto;scrollbar-width:none;"></div>
+  <div id="tvControlBar" style="position:fixed;left:0;right:0;bottom:0;z-index:210;background:rgba(0,0,0,.78);backdrop-filter:blur(6px);display:flex;align-items:center;gap:14px;padding:10px 18px;flex-wrap:wrap;border-top:1px solid rgba(255,255,255,.15);">
+    <button onclick="tvExit()" style="padding:7px 14px;border-radius:8px;border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.08);color:#fff;font-family:'Oswald',sans-serif;font-size:13px;cursor:pointer;">← Retour</button>
+    <label style="color:rgba(255,255,255,.65);font-size:12px;display:flex;align-items:center;gap:6px;text-transform:none;letter-spacing:0;font-weight:400;">Affichage
+      <select id="tvModeSelect" onchange="tvSetMode(this.value)" style="background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.3);border-radius:6px;padding:6px 10px;font-size:13px;">
+        <option value="results" style="background:#0f2a18;color:#fff;">Résultats</option>
+        <option value="standings" style="background:#0f2a18;color:#fff;">Classement</option>
+        <option value="cycle" style="background:#0f2a18;color:#fff;">Alterné</option>
       </select>
     </label>
-    <label id="tvIntervalMatchesWrap">Résultats : <input type="number" id="tvIntervalMatchesInput" min="5" max="120" value="12" style="width:55px" onchange="tvSetIntervalMatches(this.value)"> sec</label>
-    <label id="tvIntervalStandingsWrap">Classement : <input type="number" id="tvIntervalStandingsInput" min="5" max="180" value="20" style="width:55px" onchange="tvSetIntervalStandings(this.value)"> sec</label>
-    <label><input type="checkbox" id="tvScrollToggle" checked onchange="tvSetScroll(this.checked)"> 🔃 Défilement</label>
-    <button onclick="tvToggleFullscreen()">⛶ Plein écran</button>
-    <button onclick="tvToggleHidden()">🙈 Masquer</button>
+    <label id="tvIntervalMatchesWrap" style="color:rgba(255,255,255,.65);font-size:12px;display:flex;align-items:center;gap:6px;text-transform:none;letter-spacing:0;font-weight:400;">Résultats : <input type="number" id="tvIntervalMatchesInput" min="5" max="120" value="12" style="width:55px;background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.3);border-radius:6px;padding:6px 10px;font-size:13px;" onchange="tvSetIntervalMatches(this.value)"> sec</label>
+    <label id="tvIntervalStandingsWrap" style="color:rgba(255,255,255,.65);font-size:12px;display:flex;align-items:center;gap:6px;text-transform:none;letter-spacing:0;font-weight:400;">Classement : <input type="number" id="tvIntervalStandingsInput" min="5" max="180" value="20" style="width:55px;background:rgba(255,255,255,.1);color:#fff;border:1px solid rgba(255,255,255,.3);border-radius:6px;padding:6px 10px;font-size:13px;" onchange="tvSetIntervalStandings(this.value)"> sec</label>
+    <label style="color:rgba(255,255,255,.65);font-size:12px;display:flex;align-items:center;gap:6px;text-transform:none;letter-spacing:0;font-weight:400;"><input type="checkbox" id="tvScrollToggle" checked onchange="tvSetScroll(this.checked)"> 🔃 Défilement</label>
+    <button onclick="tvToggleFullscreen()" style="padding:7px 14px;border-radius:8px;border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.08);color:#fff;font-family:'Oswald',sans-serif;font-size:13px;cursor:pointer;">⛶ Plein écran</button>
+    <button onclick="tvToggleHidden()" style="padding:7px 14px;border-radius:8px;border:1px solid rgba(255,255,255,.3);background:rgba(255,255,255,.08);color:#fff;font-family:'Oswald',sans-serif;font-size:13px;cursor:pointer;">🙈 Masquer</button>
   </div>
-  <div class="tv-show-tab" id="tvShowTab" onclick="tvToggleHidden()" title="Réglages">⚙</div>
+  <div id="tvShowTab" onclick="tvToggleHidden()" title="Réglages" style="position:fixed;right:14px;bottom:14px;z-index:210;width:42px;height:42px;border-radius:50%;background:rgba(0,0,0,.6);border:1px solid rgba(255,255,255,.3);color:#fff;align-items:center;justify-content:center;cursor:pointer;font-size:17px;display:none;">⚙</div>
 </div>
 
 </div><!-- /appScreen -->
 
 <!-- ── Modale édition équipe ── -->
-<div class="modal-overlay" id="editTeamModal">
-  <div class="modal-box">
-    <div class="card-ttl" id="editTeamTitle">Équipe</div>
+<div id="editTeamModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:400;align-items:center;justify-content:center;padding:16px;">
+  <div style="background:#fff;border-radius:14px;padding:20px;max-width:420px;width:100%;max-height:85vh;overflow-y:auto;">
+    <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:15px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;" id="editTeamTitle">Équipe</div>
     <input type="hidden" id="editTeamId">
-    <label>Joueur 1 *</label><input type="text" id="editP1" style="margin-bottom:10px" placeholder="Prénom Nom">
-    <label>Joueur 2 *</label><input type="text" id="editP2" style="margin-bottom:10px" placeholder="Prénom Nom">
-    <label>Club</label><input type="text" id="editClub" style="margin-bottom:10px" placeholder="Nom du club">
-    <label>Niveau (têtes de série)</label>
-    <select id="editLv" style="margin-bottom:14px">
+    <label style="font-size:12px;color:#7a6a50;display:block;margin-bottom:4px;">Joueur 1 *</label><input type="text" id="editP1" style="width:100%;padding:9px 10px;border:1px solid #ddd0ad;border-radius:8px;font-size:14px;background:#fff;color:#2b2013;margin-bottom:10px;" placeholder="Prénom Nom">
+    <label style="font-size:12px;color:#7a6a50;display:block;margin-bottom:4px;">Joueur 2 *</label><input type="text" id="editP2" style="width:100%;padding:9px 10px;border:1px solid #ddd0ad;border-radius:8px;font-size:14px;background:#fff;color:#2b2013;margin-bottom:10px;" placeholder="Prénom Nom">
+    <label style="font-size:12px;color:#7a6a50;display:block;margin-bottom:4px;">Club</label><input type="text" id="editClub" style="width:100%;padding:9px 10px;border:1px solid #ddd0ad;border-radius:8px;font-size:14px;background:#fff;color:#2b2013;margin-bottom:10px;" placeholder="Nom du club">
+    <label style="font-size:12px;color:#7a6a50;display:block;margin-bottom:4px;">Niveau (têtes de série)</label>
+    <select id="editLv" style="width:100%;padding:9px 10px;border:1px solid #ddd0ad;border-radius:8px;font-size:14px;background:#fff;color:#2b2013;margin-bottom:14px;">
       <option value="1">⭐ Débutant</option>
       <option value="2">⭐⭐</option>
       <option value="3" selected>⭐⭐⭐ Confirmé</option>
       <option value="4">⭐⭐⭐⭐</option>
       <option value="5">⭐⭐⭐⭐⭐ Expert</option>
     </select>
-    <div style="display:flex;gap:8px">
-      <button class="btn btn-b" style="flex:1" onclick="saveEditTeam()">Enregistrer</button>
-      <button class="btn btn-ghost" onclick="closeEditTeam()">Annuler</button>
+    <div style="display:flex;gap:8px;">
+      <button onclick="saveEditTeam()" style="flex:1;border:none;border-radius:8px;padding:9px 16px;font-family:'Oswald',sans-serif;font-weight:600;letter-spacing:.4px;cursor:pointer;font-size:13px;background:#c1440e;color:#fff;">Enregistrer</button>
+      <button onclick="closeEditTeam()" style="border:none;border-radius:8px;padding:9px 16px;font-family:'Oswald',sans-serif;font-weight:600;letter-spacing:.4px;cursor:pointer;font-size:13px;background:#fff;color:#4a3a22;border:1px solid #ddd0ad;">Annuler</button>
     </div>
   </div>
 </div>
 
 <!-- ── Modale règlement ── -->
-<div class="modal-overlay" id="rulesModal">
-  <div class="modal-box" style="max-width:580px">
-    <div class="card-ttl">📋 Règlement <button class="btn btn-ghost btn-xs" onclick="toggleRules()">✕</button></div>
-    <div style="font-size:13px;line-height:1.8;color:var(--ink2)">
+<div id="rulesModal" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,.5);z-index:400;align-items:center;justify-content:center;padding:16px;">
+  <div style="background:#fff;border-radius:14px;padding:20px;max-width:580px;width:100%;max-height:85vh;overflow-y:auto;">
+    <div style="font-family:'Oswald',sans-serif;font-weight:700;font-size:15px;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;margin-bottom:10px;">📋 Règlement <button onclick="toggleRules()" style="border:none;border-radius:8px;padding:5px 10px;font-family:'Oswald',sans-serif;font-weight:600;font-size:11px;cursor:pointer;background:#fff;color:#4a3a22;border:1px solid #ddd0ad;">✕</button></div>
+    <div style="font-size:13px;line-height:1.8;color:#4a3a22;">
       <strong>Format :</strong> doublettes (2 joueurs), parties au temps (≈ 45 min), score maximum <strong>13 points</strong> avec <strong>2 points d'écart minimum</strong>.<br><br>
       <strong>Phase 1 — Poules de 4 :</strong> chaque équipe rencontre toutes les autres de son groupe en aller simple.<br><br>
       <strong>Classement de poule :</strong> 1) Victoires (2 pts/victoire) · 2) Confrontation directe (en cas d'ex-æquo) · 3) Goal-average général · 4) Points marqués.<br><br>
@@ -516,7 +517,7 @@ import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot,
          collection, getDocs, deleteDoc, increment } from "firebase/firestore";
 
 // ═══════════════════════════════════════════════════════════
-// FIREBASE — Projet tournoi-petanque-rsth
+// FIREBASE CONFIG
 // ═══════════════════════════════════════════════════════════
 const firebaseConfig = {
   apiKey: "AIzaSyCQhLIo-WXurUBS0QEiOjjd9tby9IKHtGs",
@@ -537,7 +538,7 @@ const secondaryApp = initializeApp(firebaseConfig, 'secondary');
 const secondaryAuth = getAuth(secondaryApp);
 
 // ═══════════════════════════════════════════════════════════
-// ÉTAT GLOBAL
+// ÉTAT GLOBAL (version simplifiée pour la démonstration)
 // ═══════════════════════════════════════════════════════════
 let CURRENT_USER = null;
 let USER_ROLE = null;
@@ -602,42 +603,36 @@ function tName(id) { const t = tObj(id); return t ? t.name : '?'; }
 function tClub(id) { const t = tObj(id); return t ? t.club : ''; }
 
 // ═══════════════════════════════════════════════════════════
-// AUTHENTIFICATION
+// AUTHENTIFICATION — VERSION QUI FONCTIONNE
 // ═══════════════════════════════════════════════════════════
-
-function showAuthMsg(msg, color) {
-  const el = document.getElementById('authMsg');
-  if (el) { el.textContent = msg; el.style.color = color; }
-}
-
-function authErrMsg(code) {
-  const map = {
-    'auth/invalid-email': 'Adresse email invalide.',
-    'auth/user-not-found': 'Aucun compte avec cet email.',
-    'auth/wrong-password': 'Mot de passe incorrect.',
-    'auth/invalid-credential': 'Identifiants incorrects.',
-    'auth/too-many-requests': 'Trop de tentatives, réessayez plus tard.',
-    'auth/unauthorized-domain': 'Ce site n\'est pas autorisé pour la connexion Google.',
-    'auth/popup-closed-by-user': 'Fenêtre de connexion fermée.',
-    'auth/popup-blocked': 'Fenêtre pop-up bloquée par votre navigateur.'
-  };
-  return map[code] || 'Erreur de connexion (' + code + ')';
-}
-
 window.loginGoogle = async function() {
   const provider = new GoogleAuthProvider();
   try {
-    showAuthMsg('Connexion en cours...', 'var(--ink2)');
+    const msgEl = document.getElementById('authMsg');
+    if (msgEl) { msgEl.textContent = 'Connexion en cours...'; msgEl.style.color = 'var(--ink2)'; }
+    // Utilisation de signInWithPopup qui est plus fiable sur GitHub Pages
     const result = await signInWithPopup(auth, provider);
-    console.log('Connexion réussie:', result.user.email);
+    console.log('Connexion Google réussie:', result.user.email);
+    // Le reste est géré par onAuthStateChanged
   } catch (e) {
     console.error('Erreur Google:', e);
-    if (e.code === 'auth/popup-closed-by-user') {
-      showAuthMsg('Fenêtre de connexion fermée. Réessayez.', 'var(--red)');
-    } else if (e.code === 'auth/unauthorized-domain') {
-      showAuthMsg('⚠️ Domaine non autorisé. Vérifiez la console Firebase.', 'var(--red)');
-    } else {
-      showAuthMsg(authErrMsg(e.code), 'var(--red)');
+    const msgEl = document.getElementById('authMsg');
+    if (msgEl) {
+      if (e.code === 'auth/popup-closed-by-user') {
+        msgEl.textContent = 'Fenêtre de connexion fermée. Réessayez.';
+      } else if (e.code === 'auth/unauthorized-domain') {
+        msgEl.textContent = '⚠️ Domaine non autorisé. Ajoutez bracketorganizer.github.io dans Firebase Console → Authentication → Settings → Authorized domains';
+      } else {
+        const map = {
+          'auth/invalid-email': 'Adresse email invalide.',
+          'auth/user-not-found': 'Aucun compte avec cet email.',
+          'auth/wrong-password': 'Mot de passe incorrect.',
+          'auth/invalid-credential': 'Identifiants incorrects.',
+          'auth/too-many-requests': 'Trop de tentatives, réessayez plus tard.'
+        };
+        msgEl.textContent = map[e.code] || 'Erreur de connexion (' + e.code + ')';
+      }
+      msgEl.style.color = '#b3402a';
     }
   }
 };
@@ -645,11 +640,26 @@ window.loginGoogle = async function() {
 window.loginEmail = async function() {
   const email = document.getElementById('loginEmailInput').value.trim();
   const pass  = document.getElementById('loginPassInput').value;
-  if (!email || !pass) { showAuthMsg('Email et mot de passe requis.', 'var(--red)'); return; }
+  const msgEl = document.getElementById('authMsg');
+  if (!email || !pass) {
+    if (msgEl) { msgEl.textContent = 'Email et mot de passe requis.'; msgEl.style.color = '#b3402a'; }
+    return;
+  }
   try {
     await signInWithEmailAndPassword(auth, email, pass);
   } catch (e) {
-    showAuthMsg(authErrMsg(e.code), 'var(--red)');
+    console.error('Erreur email:', e);
+    if (msgEl) {
+      const map = {
+        'auth/invalid-email': 'Adresse email invalide.',
+        'auth/user-not-found': 'Aucun compte avec cet email.',
+        'auth/wrong-password': 'Mot de passe incorrect.',
+        'auth/invalid-credential': 'Identifiants incorrects.',
+        'auth/too-many-requests': 'Trop de tentatives, réessayez plus tard.'
+      };
+      msgEl.textContent = map[e.code] || 'Erreur de connexion (' + e.code + ')';
+      msgEl.style.color = '#b3402a';
+    }
   }
 };
 
@@ -685,14 +695,14 @@ onAuthStateChanged(auth, async (user) => {
         role = snap.data().role || 'spectator';
         console.log('Rôle trouvé:', role);
       } else {
-        console.log('Aucun rôle trouvé, création par défaut');
+        console.log('Création du document utilisateur');
         await setDoc(doc(db, 'users', user.uid), { 
           email: user.email, 
           role: 'spectator' 
         });
       }
     } catch (e) { 
-      console.warn('lecture rôle échouée', e); 
+      console.warn('Erreur lecture rôle:', e); 
     }
     USER_ROLE = role;
     showApp();
@@ -705,10 +715,6 @@ onAuthStateChanged(auth, async (user) => {
     CURRENT_USER = null; USER_ROLE = null;
     showLogin();
   }
-});
-
-getRedirectResult(auth).catch((e) => {
-  console.warn('Redirect result:', e);
 });
 
 // ═══════════════════════════════════════════════════════════
@@ -1107,8 +1113,8 @@ window.toggleLiveOpen = async function() {
 
 function updateLiveToggleBtn() {
   const btn = document.getElementById('liveToggleBtn'); if (!btn) return;
-  if (ST.liveOpen) { btn.textContent = '🟢 Live ouvert (spectateurs)'; btn.style.background = 'var(--grn)'; btn.style.borderColor = 'var(--grn)'; btn.style.color = '#fff'; }
-  else             { btn.textContent = '🔴 Live fermé (spectateurs)'; btn.style.background = 'var(--s1)'; btn.style.borderColor = 'var(--red)'; btn.style.color = 'var(--red)'; }
+  if (ST.liveOpen) { btn.textContent = '🟢 Live ouvert (spectateurs)'; btn.style.background = '#5c7a3a'; btn.style.borderColor = '#5c7a3a'; btn.style.color = '#fff'; }
+  else             { btn.textContent = '🔴 Live fermé (spectateurs)'; btn.style.background = '#f3ecda'; btn.style.borderColor = '#b3402a'; btn.style.color = '#b3402a'; }
 }
 
 window.toggleRegistrationOpen = async function() {
@@ -1130,8 +1136,8 @@ window.saveRegistrationMax = async function() {
 
 function updateRegistrationToggleBtn() {
   const btn = document.getElementById('registrationToggleBtn'); if (!btn) return;
-  if (ST.registrationOpen) { btn.textContent = '🟢 Inscriptions ouvertes (public)'; btn.style.background = 'var(--grn)'; btn.style.borderColor = 'var(--grn)'; btn.style.color = '#fff'; }
-  else                     { btn.textContent = '🔴 Inscriptions fermées (public)'; btn.style.background = 'var(--s1)'; btn.style.borderColor = 'var(--red)'; btn.style.color = 'var(--red)'; }
+  if (ST.registrationOpen) { btn.textContent = '🟢 Inscriptions ouvertes (public)'; btn.style.background = '#5c7a3a'; btn.style.borderColor = '#5c7a3a'; btn.style.color = '#fff'; }
+  else                     { btn.textContent = '🔴 Inscriptions fermées (public)'; btn.style.background = '#f3ecda'; btn.style.borderColor = '#b3402a'; btn.style.color = '#b3402a'; }
   const maxEl = document.getElementById('registrationMaxInput');
   if (maxEl && document.activeElement !== maxEl) maxEl.value = ST.registrationMax != null ? ST.registrationMax : '';
 }
@@ -1266,9 +1272,15 @@ window.reloadApp = function() { location.reload(); };
 
 window.goToLive = function() { goTo(4); closeMobileMenu(); };
 
-window.toggleMobileMenu = function() { document.getElementById('mobileDrawer').classList.toggle('open'); document.getElementById('menuOverlay').classList.toggle('open'); };
+window.toggleMobileMenu = function() { 
+  document.getElementById('mobileDrawer').classList.toggle('open'); 
+  document.getElementById('menuOverlay').classList.toggle('open'); 
+};
 
-window.closeMobileMenu = function() { document.getElementById('mobileDrawer').classList.remove('open'); document.getElementById('menuOverlay').classList.remove('open'); };
+window.closeMobileMenu = function() { 
+  document.getElementById('mobileDrawer').classList.remove('open'); 
+  document.getElementById('menuOverlay').classList.remove('open'); 
+};
 
 function syncDrawerButtons() {
   [['liveBtn','drawerLiveBtn'],['tvBtn','drawerTvBtn'],['adminBtn','drawerAdminBtn'],['backBtn','drawerBackBtn'],['fwdBtn','drawerFwdBtn'],['logoutBtn','drawerLogoutBtn']].forEach(([deskId, drawId]) => {
@@ -1280,7 +1292,7 @@ function syncDrawerButtons() {
 window.addEventListener('resize', () => { if (window.innerWidth > 767) closeMobileMenu(); });
 
 // ═══════════════════════════════════════════════════════════
-// CONFIGURATION
+// CONFIGURATION (version simplifiée)
 // ═══════════════════════════════════════════════════════════
 function syncCfgForm() {
   const c = ST.cfg;
@@ -1458,7 +1470,7 @@ window.autoFillTeams = async function() {
 };
 
 // ═══════════════════════════════════════════════════════════
-// PHASE 1 — GROUPES DE 4
+// PHASE 1 — GROUPES DE 4 (fonctions principales)
 // ═══════════════════════════════════════════════════════════
 function computeGroupSizes(n) {
   let numGroups = Math.max(1, Math.round(n / 4));
@@ -1611,7 +1623,7 @@ window.startTournament = async function() {
 };
 
 // ═══════════════════════════════════════════════════════════
-// PHASE 2 — TABLEAUX
+// PHASE 2 — TABLEAUX (version simplifiée mais fonctionnelle)
 // ═══════════════════════════════════════════════════════════
 function nextPow2(n) { let p = 1; while (p < n) p *= 2; return p; }
 
@@ -1721,7 +1733,7 @@ function bracketLoser(bracket, round, idx) {
 }
 
 // ═══════════════════════════════════════════════════════════
-// SYSTÈME DE CLASSEMENT COMPLET (fonctions simplifiées)
+// FONCTIONS DE CLASSEMENT (simplifiées)
 // ═══════════════════════════════════════════════════════════
 function nodeMatchId(bracket, path, round, idx) {
   if (!path.length) return bracketMatchId(bracket, round, idx);
@@ -2411,6 +2423,7 @@ window.printPlanning = function() {
 };
 
 console.log('Application chargée ✅');
+console.log('Pour vous connecter en tant qu\'administrateur, ajoutez votre compte Google dans Firestore collection "users" avec role="admin"');
 </script>
 
 </body>
