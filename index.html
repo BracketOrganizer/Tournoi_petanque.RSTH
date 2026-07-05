@@ -543,7 +543,7 @@ let unsubResults = null;
 let unsubLiveWatch = null;
 let liveWatchIv = null;
 let pendingSpecTarget = null;
-let tvCycleIv = null, tvClockIv = null, tvScrollIv = null;
+let tvCycleIv = null, tvClockIv = null, tvScrollIv = null, tvScrollRAF = null;
 let tvScreenIndex = 0, tvLastPhase = null, tvLastScreensSig = null, tvLastRenderedKey = null;
 
 const ST = {
@@ -2036,19 +2036,37 @@ function startTVAutoScroll() {
   el.scrollTop = startPos;
   tvScrollState = { phase: 'pausedTop', since: Date.now() };
   if (getTVSettings().scroll === false) return;
-  const SPEED = 0.7, PAUSE = 2500;
-  tvScrollIv = setInterval(() => {
-    if (!el.isConnected) return;
-    const maxS = el.scrollHeight - el.clientHeight; if (maxS <= 6) return;
-    const now = Date.now();
-    if (tvScrollState.phase === 'pausedTop')   { if (now - tvScrollState.since >= PAUSE) tvScrollState = { phase: 'scrollingDown', since: now }; return; }
-    if (tvScrollState.phase === 'pausedBottom') { if (now - tvScrollState.since >= PAUSE) { el.scrollTop = 0; tvScrollState = { phase: 'pausedTop', since: now }; } return; }
-    el.scrollTop += SPEED;
-    if (el.scrollTop >= maxS - 1) { el.scrollTop = maxS; tvScrollState = { phase: 'pausedBottom', since: now }; }
-  }, 30);
+  const SPEED_PX_PER_SEC = 23, PAUSE = 2500;
+  let lastTs = null;
+  // Safari iOS arrondit/tronque el.scrollTop à l'entier à CHAQUE écriture : si on
+  // accumule en relisant el.scrollTop (qui vaut donc 0 ou 1 pixel près), les
+  // incréments inférieurs à 1px sont perdus à chaque image et le défilement ne
+  // bouge jamais. On garde donc notre propre compteur en virgule flottante,
+  // indépendant de ce que le navigateur affiche/arrondit.
+  let scrollPos = startPos;
+  function tick(ts) {
+    if (!el.isConnected) { tvScrollRAF = null; return; }
+    if (lastTs === null) lastTs = ts;
+    const dt = ts - lastTs; lastTs = ts;
+    const maxS = el.scrollHeight - el.clientHeight;
+    if (maxS > 6) {
+      const now = Date.now();
+      if (tvScrollState.phase === 'pausedTop') {
+        if (now - tvScrollState.since >= PAUSE) tvScrollState = { phase: 'scrollingDown', since: now };
+      } else if (tvScrollState.phase === 'pausedBottom') {
+        if (now - tvScrollState.since >= PAUSE) { scrollPos = 0; el.scrollTop = 0; tvScrollState = { phase: 'pausedTop', since: now }; }
+      } else {
+        scrollPos += SPEED_PX_PER_SEC * (dt / 1000);
+        if (scrollPos >= maxS - 1) { scrollPos = maxS; el.scrollTop = maxS; tvScrollState = { phase: 'pausedBottom', since: now }; }
+        else { el.scrollTop = scrollPos; }
+      }
+    }
+    tvScrollRAF = requestAnimationFrame(tick);
+  }
+  tvScrollRAF = requestAnimationFrame(tick);
 }
 
-function stopTVAutoScroll() { if (tvScrollIv) { clearInterval(tvScrollIv); tvScrollIv = null; } }
+function stopTVAutoScroll() { if (tvScrollIv) { clearInterval(tvScrollIv); tvScrollIv = null; } if (tvScrollRAF) { cancelAnimationFrame(tvScrollRAF); tvScrollRAF = null; } }
 
 function renderTVPage() { renderTVSettingsUI(); renderTVContent(); }
 
