@@ -260,16 +260,16 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
     </div>
     <div class="card" style="margin-bottom:10px">
       <div class="card-ttl">👥 Gestion du staff</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr auto auto;gap:8px;margin-bottom:10px;align-items:end">
-        <div><label>Email</label><input type="email" id="newUserEmail" placeholder="scorer@email.com"></div>
-        <div><label>Mot de passe</label><input type="password" id="newUserPass" placeholder="••••••••"></div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-bottom:10px;align-items:end">
+        <div><label>Email</label><input type="email" id="newUserEmail" placeholder="scorer@email.com" style="font-size:14px"></div>
+        <div><label>Mot de passe</label><input type="password" id="newUserPass" placeholder="••••••••" style="font-size:14px"></div>
         <div><label>Rôle</label>
           <select id="newUserRole" style="padding:9px 8px">
             <option value="scorer">🎯 Scorer</option>
             <option value="admin">👑 Admin</option>
           </select>
         </div>
-        <div style="padding-top:16px"><button class="btn btn-b btn-sm" onclick="adminCreateUser()">+ Créer</button></div>
+        <div><button class="btn btn-b btn-sm" onclick="adminCreateUser()" style="width:100%">+ Créer</button></div>
       </div>
       <div id="userListEl"></div>
     </div>
@@ -1226,12 +1226,12 @@ window.loadUserList = async function() {
     el.innerHTML = snap.docs.map(d => {
       const u = d.data();
       const roleColor = u.role === 'admin' ? 'var(--brand)' : u.role === 'scorer' ? 'var(--blu)' : 'var(--muted)';
-      return `<div style="display:flex;justify-content:space-between;align-items:center;padding:7px 10px;background:var(--s1);border:1px solid var(--bdr);border-radius:6px;margin-bottom:4px">
-        <div>
-          <span style="font-size:13px">${u.email}</span>
-          <span style="color:${roleColor};font-size:11px;font-weight:700;margin-left:8px">${u.role === 'admin' ? '👑' : u.role === 'scorer' ? '🎯' : '👁'} ${u.role}</span>
+      return `<div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px;padding:9px 12px;background:var(--s1);border:1px solid var(--bdr);border-radius:6px;margin-bottom:5px">
+        <div style="min-width:0;flex:1 1 220px">
+          <div style="font-size:14px;word-break:break-all">${u.email}</div>
+          <span style="color:${roleColor};font-size:11px;font-weight:700">${u.role === 'admin' ? '👑' : u.role === 'scorer' ? '🎯' : '👁'} ${u.role}</span>
         </div>
-        <div style="display:flex;gap:6px">
+        <div style="display:flex;gap:6px;flex-shrink:0">
           <select style="padding:4px 6px;font-size:11px;border-radius:6px;border:1px solid var(--bdr)" onchange="changeUserRole('${d.id}',this.value)">
             <option value="scorer" ${u.role==='scorer'?'selected':''}>Scorer</option>
             <option value="admin"  ${u.role==='admin'?'selected':''}>Admin</option>
