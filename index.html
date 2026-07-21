@@ -555,7 +555,7 @@ const ST = {
   results: {},
   phase: 'config',
   activePoolRound: 0,
-  activeBracketRound: { P: 0, C: 0 },
+  activeTour: { P: 1, C: 1 },
   page4View: null,
   liveOpen: false,
   registrationOpen: false,
@@ -924,7 +924,7 @@ function applyTournamentData(data) {
   ST.brackets = data.brackets || { P: null, C: null };
   ST.phase = data.phase || 'config';
   ST.activePoolRound = data.activePoolRound || 0;
-  ST.activeBracketRound = data.activeBracketRound || { P: 0, C: 0 };
+  ST.activeTour = data.activeTour || { P: 1, C: 1 };
   ST.registrationOpen = data.registrationOpen === true;
   ST.registrationMax = (data.registrationMax != null && data.registrationMax !== '') ? +data.registrationMax : null;
   updateRegistrationUI();
@@ -1260,8 +1260,8 @@ window.newTournament = async function() {
   if (!isAdmin()) return;
   if (!confirm('⚠️ Repartir de zéro ? Tout sera effacé.')) return;
   ST.teams = []; ST.groups = []; ST.poolSchedule = []; ST.brackets = { P: null, C: null }; ST.results = {};
-  ST.phase = 'config'; ST.activePoolRound = 0; ST.activeBracketRound = { P: 0, C: 0 };
-  await saveTournament({ teams: [], groups: [], poolSchedule: [], brackets: { P: null, C: null }, phase: 'config', activePoolRound: 0, activeBracketRound: { P: 0, C: 0 }, liveOpen: false, registrationOpen: false, registrationMax: null });
+  ST.phase = 'config'; ST.activePoolRound = 0; ST.activeTour = { P: 1, C: 1 };
+  await saveTournament({ teams: [], groups: [], poolSchedule: [], brackets: { P: null, C: null }, phase: 'config', activePoolRound: 0, activeTour: { P: 1, C: 1 }, liveOpen: false, registrationOpen: false, registrationMax: null });
   await setDoc(doc(db, 'petanque', 'status'), { liveOpen: false, registrationOpen: false, registrationCount: 0 }, { merge: true });
   try { const snap = await getDocs(collection(db, 'petanque_results')); await Promise.all(snap.docs.map(d => deleteDoc(doc(db, 'petanque_results', d.id)))); } catch (e) {}
   try { const snap = await getDocs(collection(db, 'petanque_registrations')); await Promise.all(snap.docs.map(d => deleteDoc(doc(db, 'petanque_registrations', d.id)))); } catch (e) {}
@@ -1687,65 +1687,135 @@ window.buildBrackets = async function() {
   const principaleSeeds = rank1.concat(rank2.slice().reverse());
   const consolanteSeeds = rest;
   ST.brackets = { P: buildBracketSeeds(principaleSeeds), C: buildBracketSeeds(consolanteSeeds) };
-  ST.phase = 'bracket'; ST.activeBracketRound = { P: 0, C: 0 };
-  await saveTournament({ brackets: ST.brackets, phase: 'bracket', activeBracketRound: { P: 0, C: 0 } });
+  ST.phase = 'bracket'; ST.activeTour = { P: 1, C: 1 };
+  await saveTournament({ brackets: ST.brackets, phase: 'bracket', activeTour: { P: 1, C: 1 } });
   goTo(4);
 };
 
-function bracketMatchId(bracket, round, idx) { return 'br-' + bracket + '-r' + round + '-m' + idx; }
-
-function bracketMatchTeams(bracket, round, idx) {
-  const br = ST.brackets[bracket]; if (!br) return { a: null, b: null };
-  if (round === 0) return { a: br.slots[idx * 2] ?? null, b: br.slots[idx * 2 + 1] ?? null };
-  return { a: bracketWinner(bracket, round - 1, idx * 2), b: bracketWinner(bracket, round - 1, idx * 2 + 1) };
-}
-
-function getBracketResult(bracket, round, idx) {
-  const id = bracketMatchId(bracket, round, idx);
-  const d = ST.results[id] || {};
-  return { ga: d.ga != null ? d.ga : '', gb: d.gb != null ? d.gb : '', bye: !!d.bye };
-}
-
-function bracketWinner(bracket, round, idx) {
-  const { a, b } = bracketMatchTeams(bracket, round, idx);
-  if (a == null && b == null) return null;
-  if (a == null) return b; if (b == null) return a;
-  const r = getBracketResult(bracket, round, idx);
-  if (r.ga === '' || r.gb === '') return null;
-  return (+r.ga > +r.gb) ? a : b;
-}
-
-function bracketLoser(bracket, round, idx) {
-  const { a, b } = bracketMatchTeams(bracket, round, idx);
-  if (a == null || b == null) return null;
-  const r = getBracketResult(bracket, round, idx);
-  if (r.ga === '' || r.gb === '') return null;
-  return (+r.ga > +r.gb) ? b : a;
-}
-
 // ═══════════════════════════════════════════════════════════
-// FONCTIONS DE CLASSEMENT (simplifiées)
+// MOTEUR DE TABLEAU AVEC MATCHS DE CLASSEMENT COMPLETS
+// Chaque tableau (Principale / Consolante) fonctionne comme une
+// échelle de classement récursive : à chaque tour, les gagnants
+// se retrouvent entre eux et les perdants se retrouvent entre eux,
+// si bien que toutes les équipes jouent le même nombre de matchs
+// (8e, quart, demi, finale + matchs de classement) et obtiennent
+// une place précise (1re, 2e, 3e... jusqu'à la dernière).
+//
+// Un "cohort" = groupe d'équipes ayant le même parcours (victoires/
+// défaites) jusqu'ici, identifié par un chemin binaire `path`
+// ('0' = côté gagnants, '1' = côté perdants). path='' = tour 1
+// (tout le monde). Un match de ce cohort se joue au tour
+// path.length + 1.
 // ═══════════════════════════════════════════════════════════
-function rankNode(bracket, node, path) {
-  if (!node || !node.teamCount) return [];
-  if (node.depth === 0) return node.autoWinner ? [{ teamId: node.autoWinner, place: 1 }] : [];
-  const out = []; let place = 1;
-  const fr = node.depth - 1;
-  const w = bracketWinner(bracket, fr, 0);
-  const l = bracketLoser(bracket, fr, 0);
-  if (w) { out.push({ teamId: w, place }); place++; }
-  if (l) { out.push({ teamId: l, place }); place++; }
+
+function consNodeRefs(bracket, path) {
+  const br = ST.brackets[bracket];
+  if (path === '') return br.slots.map((_, i) => ({ type: 'seed', i }));
+  const parentPath = path.slice(0, -1);
+  const bit = path[path.length - 1];
+  const parentRefs = consNodeRefs(bracket, parentPath);
+  const type = bit === '0' ? 'winner' : 'loser';
+  const out = [];
+  for (let i = 0; i < parentRefs.length; i += 2) out.push({ type, path: parentPath, idx: i / 2 });
   return out;
 }
 
+function consMatchId(bracket, path, idx) { return 'br-' + bracket + '-p' + (path === '' ? 'R' : path) + '-m' + idx; }
+
+function consMatchResult(bracket, path, idx) {
+  const d = ST.results[consMatchId(bracket, path, idx)] || {};
+  return { ga: d.ga != null ? d.ga : '', gb: d.gb != null ? d.gb : '' };
+}
+
+function consResolveRef(bracket, ref) {
+  const br = ST.brackets[bracket];
+  if (ref.type === 'seed') return br.slots[ref.i] ?? null;
+  const refs = consNodeRefs(bracket, ref.path);
+  const a = consResolveRef(bracket, refs[ref.idx * 2]);
+  const b = consResolveRef(bracket, refs[ref.idx * 2 + 1]);
+  if (a == null && b == null) return null;
+  if (a == null) return ref.type === 'winner' ? b : null;
+  if (b == null) return ref.type === 'winner' ? a : null;
+  const r = consMatchResult(bracket, ref.path, ref.idx);
+  if (r.ga === '' || r.gb === '') return null;
+  const aWon = +r.ga > +r.gb;
+  if (ref.type === 'winner') return aWon ? a : b;
+  return aWon ? b : a;
+}
+
+function consMatchTeams(bracket, path, idx) {
+  const refs = consNodeRefs(bracket, path);
+  return { a: consResolveRef(bracket, refs[idx * 2]), b: consResolveRef(bracket, refs[idx * 2 + 1]) };
+}
+
+function consCohortPaths(pathLen) {
+  const n = Math.pow(2, pathLen); const out = [];
+  for (let v = 0; v < n; v++) out.push(pathLen === 0 ? '' : v.toString(2).padStart(pathLen, '0'));
+  return out;
+}
+
+function consStageName(groupSize) {
+  const names = { 4: 'Demi-finale', 8: 'Quart de finale', 16: '8e de finale', 32: '16e de finale', 64: '32e de finale' };
+  return names[groupSize] || (groupSize > 2 ? groupSize + 'e de tour' : '');
+}
+
+function consPlaceRange(bracket, path) {
+  const size = ST.brackets[bracket].slots.length;
+  const groupSize = size / Math.pow(2, path.length);
+  const val = path === '' ? 0 : parseInt(path, 2);
+  const lo = val * groupSize + 1;
+  return { lo, hi: lo + groupSize - 1 };
+}
+
+function consGroupLabel(bracket, path) {
+  if (path === '') { const size = ST.brackets[bracket].slots.length; return consStageName(size) || '1er tour'; }
+  const { lo, hi } = consPlaceRange(bracket, path);
+  if (hi - lo === 1) {
+    if (lo === 1) return 'Finale';
+    if (lo === 3) return 'Petite finale (3e place)';
+    return `Places ${lo}-${hi}`;
+  }
+  const stage = consStageName(hi - lo + 1);
+  return (stage ? stage + ' · ' : '') + `Places ${lo}-${hi}`;
+}
+
+function consLeafTeam(bracket, leafPath) {
+  const br = ST.brackets[bracket];
+  if (br.depth === 0) return br.autoWinner;
+  const parentPath = leafPath.slice(0, -1);
+  const type = leafPath[leafPath.length - 1] === '0' ? 'winner' : 'loser';
+  return consResolveRef(bracket, { type, path: parentPath, idx: 0 });
+}
+
+function isConsTourDone(bracket, tour) {
+  const paths = consCohortPaths(tour - 1);
+  for (const path of paths) {
+    const refs = consNodeRefs(bracket, path);
+    const n = refs.length / 2;
+    for (let idx = 0; idx < n; idx++) {
+      const { a, b } = consMatchTeams(bracket, path, idx);
+      if (a == null || b == null) continue;
+      const r = consMatchResult(bracket, path, idx);
+      if (r.ga === '' || r.gb === '') return false;
+    }
+  }
+  return true;
+}
+
+// ═══════════════════════════════════════════════════════════
+// CLASSEMENT FINAL COMPLET
+// ═══════════════════════════════════════════════════════════
 function computeFinalRanking() {
   const ranking = []; let baseOffset = 0;
   ['P', 'C'].forEach(bk => {
     const br = ST.brackets[bk]; if (!br || !br.teamCount) return;
     const label = bk === 'P' ? 'Principale' : 'Consolante';
-    const ranked = rankNode(bk, br, []).sort((a, b) => a.place - b.place);
-    ranked.forEach(r => ranking.push({ place: baseOffset + r.place, teamId: r.teamId, label }));
-    baseOffset += br.teamCount;
+    let leaves;
+    if (br.depth === 0) leaves = [{ team: br.autoWinner }];
+    else leaves = consCohortPaths(br.depth).map(p => ({ team: consLeafTeam(bk, p) }));
+    const withTeams = leaves.filter(l => l.team != null);
+    withTeams.forEach((l, i) => ranking.push({ place: baseOffset + i + 1, teamId: l.team, label }));
+    baseOffset += withTeams.length;
   });
   return ranking;
 }
@@ -1865,31 +1935,9 @@ function renderPoolStandingsPanel() {
     }).join('') + `</div>`;
 }
 
-function bracketRoundName(depth, round) {
-  const remaining = depth - round;
-  const names = { 1: 'Finale', 2: 'Demi-finale', 3: 'Quart de finale', 4: '8e de finale' };
-  return names[remaining] || (remaining + 'e tour');
-}
-
-function bracketRoundMatchCount(bracket, round) {
-  const br = ST.brackets[bracket]; if (!br) return 0;
-  return br.slots.length / Math.pow(2, round + 1);
-}
-
-function isBracketRoundDone(bracket, round) {
-  const n = bracketRoundMatchCount(bracket, round);
-  for (let idx = 0; idx < n; idx++) {
-    const { a, b } = bracketMatchTeams(bracket, round, idx);
-    if (a == null || b == null) continue;
-    const r = getBracketResult(bracket, round, idx);
-    if (r.ga === '' || r.gb === '') return false;
-  }
-  return true;
-}
-
-window.setBracketResult = async function(bracket, round, idx, f, v) {
+window.setConsResult = async function(bracket, path, idx, f, v) {
   if (!isScorer()) return;
-  const id = bracketMatchId(bracket, round, idx);
+  const id = consMatchId(bracket, path, idx);
   const cur = ST.results[id] || { ga: '', gb: '' };
   cur[f] = v === '' ? '' : Math.max(0, Math.min(ST.cfg.scoreMax + 5, +v));
   ST.results[id] = cur;
@@ -1902,16 +1950,16 @@ function renderBracketRoundTabs(bracket) {
   const br = ST.brackets[bracket]; if (!br) { el.innerHTML = ''; return; }
   if (br.depth === 0) { el.innerHTML = '<div class="info info-b">Une seule équipe.</div>'; return; }
   let html = '';
-  for (let g = 0; g < br.depth; g++) {
-    const done = isBracketRoundDone(bracket, g);
-    html += `<button class="rtab ${ST.activeBracketRound[bracket] === g ? 'rtab-active' : ''}" onclick="setBracketRound('${bracket}',${g})">Tour ${g + 1} ${done ? '✓' : ''}</button>`;
+  for (let t = 1; t <= br.depth; t++) {
+    const done = isConsTourDone(bracket, t);
+    html += `<button class="rtab ${ST.activeTour[bracket] === t ? 'rtab-active' : ''}" onclick="setBracketRound('${bracket}',${t})">Tour ${t} ${done ? '✓' : ''}</button>`;
   }
   el.innerHTML = html;
 }
 
-window.setBracketRound = async function(bracket, rd) {
-  ST.activeBracketRound[bracket] = rd;
-  if (isAdmin()) await saveTournament({ activeBracketRound: ST.activeBracketRound });
+window.setBracketRound = async function(bracket, t) {
+  ST.activeTour[bracket] = t;
+  if (isAdmin()) await saveTournament({ activeTour: ST.activeTour });
   renderBracketsView();
 };
 
@@ -1924,27 +1972,33 @@ function renderBracketColumn(bracket, title) {
   if (br.depth === 0) {
     body = `<div class="info info-g">🏆 ${tName(br.autoWinner)} — champion</div>`;
   } else {
-    const g = Math.min(Math.max(0, ST.activeBracketRound[bracket] || 0), br.depth - 1);
-    const n = bracketRoundMatchCount(bracket, g);
+    const t = Math.min(Math.max(1, ST.activeTour[bracket] || 1), br.depth);
+    const paths = consCohortPaths(t - 1);
     let html = '';
-    for (let idx = 0; idx < n; idx++) {
-      const { a, b } = bracketMatchTeams(bracket, g, idx);
-      if (a == null && b == null) continue;
-      const r = getBracketResult(bracket, g, idx);
-      const done = r.ga !== '' && r.gb !== '';
-      const ecartOk = done && Math.abs(+r.ga - +r.gb) >= ST.cfg.ecart;
-      const warn = done && !ecartOk ? `<span style="color:var(--ylw);font-size:11px"> ⚠</span>` : '';
-      const setA = `setBracketResult('${bracket}',${g},${idx},'ga',this.value)`;
-      const setB = `setBracketResult('${bracket}',${g},${idx},'gb',this.value)`;
-      html += `<div style="background:var(--s1);border:1px solid ${done?(ecartOk?'var(--grn)':'var(--ylw)'):'var(--bdr)'};border-radius:10px;padding:10px 14px;margin-bottom:8px">
-        <div style="font-size:11px;color:var(--muted);display:flex;justify-content:space-between">${bracketRoundName(br.depth, g)} · Match ${idx + 1}${warn}</div>
-        <div style="display:flex;align-items:center;gap:10px;margin-top:6px">
-          <div style="flex:1;font-weight:600">${a ? tName(a) : '—'}</div>
-          ${scoreInputHTML(r.ga, r.gb, setA, setB, !isScorer())}
-          <div style="flex:1;font-weight:600;text-align:right">${b ? tName(b) : '—'}</div>
-        </div>
-      </div>`;
-    }
+    paths.forEach(path => {
+      const refs = consNodeRefs(bracket, path);
+      const n = refs.length / 2;
+      const groupLabel = consGroupLabel(bracket, path);
+      for (let idx = 0; idx < n; idx++) {
+        const { a, b } = consMatchTeams(bracket, path, idx);
+        if (a == null && b == null) continue;
+        const r = consMatchResult(bracket, path, idx);
+        const done = r.ga !== '' && r.gb !== '';
+        const isBye = (a == null || b == null);
+        const ecartOk = done && Math.abs(+r.ga - +r.gb) >= ST.cfg.ecart;
+        const warn = done && !ecartOk ? `<span style="color:var(--ylw);font-size:11px"> ⚠</span>` : '';
+        const setA = `setConsResult('${bracket}','${path}',${idx},'ga',this.value)`;
+        const setB = `setConsResult('${bracket}','${path}',${idx},'gb',this.value)`;
+        html += `<div style="background:var(--s1);border:1px solid ${isBye ? 'var(--bdr)' : (done?(ecartOk?'var(--grn)':'var(--ylw)'):'var(--bdr)')};border-radius:10px;padding:10px 14px;margin-bottom:8px">
+          <div style="font-size:11px;color:var(--muted);display:flex;justify-content:space-between">${groupLabel} · Match ${idx + 1}${warn}</div>
+          <div style="display:flex;align-items:center;gap:10px;margin-top:6px">
+            <div style="flex:1;font-weight:600">${a ? tName(a) : '—'}</div>
+            ${isBye ? '<span style="font-size:12px;color:var(--muted)">Qualifié direct</span>' : scoreInputHTML(r.ga, r.gb, setA, setB, !isScorer())}
+            <div style="flex:1;font-weight:600;text-align:right">${b ? tName(b) : '—'}</div>
+          </div>
+        </div>`;
+      }
+    });
     body = html || '<div class="info info-b">Aucun match à ce tour.</div>';
   }
   const listEl = document.getElementById('bracketMatchList_' + bracket);
@@ -2141,19 +2195,23 @@ function getTVScreens() {
     const br = ST.brackets[bk]; if (!br || !br.teamCount) return;
     const label = bk === 'P' ? 'Principale' : 'Consolante';
     if (br.depth === 0) { screens.push({ key: 'auto-' + bk, kind: 'matches', title: `🏆 ${label}`, render: () => `<div class="tv-empty">${tName(br.autoWinner)} championne.</div>` }); return; }
-    for (let g = 0; g < br.depth; g++) {
+    for (let t = 1; t <= br.depth; t++) {
       const flat = [];
-      const n = bracketRoundMatchCount(bk, g);
-      for (let idx = 0; idx < n; idx++) {
-        const { a, b } = bracketMatchTeams(bk, g, idx);
-        if (a == null && b == null) continue;
-        const r = getBracketResult(bk, g, idx);
-        flat.push({ label: label + ' · ' + bracketRoundName(br.depth, g) + ' · M' + (idx + 1), time: '', aId: a, bId: b, r, done: (r.ga !== '' && r.gb !== '') || r.bye, isLive: g === ST.activeBracketRound[bk] });
-      }
+      consCohortPaths(t - 1).forEach(path => {
+        const refs = consNodeRefs(bk, path);
+        const n = refs.length / 2;
+        const groupLabel = consGroupLabel(bk, path);
+        for (let idx = 0; idx < n; idx++) {
+          const { a, b } = consMatchTeams(bk, path, idx);
+          if (a == null && b == null) continue;
+          const r = consMatchResult(bk, path, idx);
+          flat.push({ label: label + ' · ' + groupLabel + ' · M' + (idx + 1), time: '', aId: a, bId: b, r, done: (r.ga !== '' && r.gb !== ''), isLive: t === ST.activeTour[bk] });
+        }
+      });
       const pageCount = Math.max(1, Math.ceil(flat.length / TV_PAGE_SIZE));
       for (let i = 0; i < pageCount; i++) {
         const page = flat.slice(i * TV_PAGE_SIZE, (i + 1) * TV_PAGE_SIZE);
-        screens.push({ key: 'br-' + bk + '-g' + g + '-' + i, kind: 'matches', title: pageCount > 1 ? `🏆 ${label} · Tour ${g + 1} (${i + 1}/${pageCount})` : `🏆 ${label} · Tour ${g + 1}`, render: () => tvMatchGridHTML(page) });
+        screens.push({ key: 'br-' + bk + '-t' + t + '-' + i, kind: 'matches', title: pageCount > 1 ? `🏆 ${label} · Tour ${t} (${i + 1}/${pageCount})` : `🏆 ${label} · Tour ${t}`, render: () => tvMatchGridHTML(page) });
       }
     }
   });
