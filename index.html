@@ -1635,14 +1635,41 @@ window.startTournament = async function() {
 // ═══════════════════════════════════════════════════════════
 function nextPow2(n) { let p = 1; while (p < n) p *= 2; return p; }
 
-function seedOrder(size) {
-  let order = [1, 2];
-  while (order.length < size) {
-    const len = order.length * 2, next = [];
-    order.forEach(s => { next.push(s); next.push(len + 1 - s); });
-    order = next;
+// Répartit récursivement les équipes dans les cases du tableau en équilibrant
+// les groupes de phase 1 à CHAQUE niveau de coupure (pas seulement le 1er tour).
+// Résultat : deux équipes du même groupe sont placées dans des moitiés opposées
+// dès que possible, donc elles ne peuvent se recroiser qu'au tout dernier tour
+// (le tour qui fixe leur classement), jamais avant.
+function distributeSlots(seedsArray, size) {
+  const groupOf = t => t ? (t.groupId || '_none_') : null;
+  const padded = seedsArray.slice();
+  while (padded.length < size) padded.push(null);
+
+  function splitBalanced(list, half) {
+    const real = list.filter(t => t !== null);
+    const byGroup = {};
+    real.forEach(t => { const g = groupOf(t); (byGroup[g] = byGroup[g] || []).push(t); });
+    const groups = Object.values(byGroup).sort((a, b) => b.length - a.length);
+    const left = [], right = [];
+    groups.forEach(g => {
+      g.forEach((t, i) => {
+        const wantLeft = i % 2 === 0;
+        if (wantLeft) { if (left.length < half) left.push(t); else right.push(t); }
+        else { if (right.length < half) right.push(t); else left.push(t); }
+      });
+    });
+    while (left.length < half) left.push(null);
+    while (right.length < half) right.push(null);
+    return [left, right];
   }
-  return order;
+
+  function rec(list) {
+    if (list.length === 1) return [list[0] ? list[0].teamId : null];
+    const half = list.length / 2;
+    const [left, right] = splitBalanced(list, half);
+    return rec(left).concat(rec(right));
+  }
+  return rec(padded);
 }
 
 function buildBracketSeeds(seedsArray) {
@@ -1650,24 +1677,7 @@ function buildBracketSeeds(seedsArray) {
   if (N === 0) return null;
   if (N === 1) return { slots: [seedsArray[0].teamId], depth: 0, teamCount: 1, autoWinner: seedsArray[0].teamId };
   const size = nextPow2(N);
-  const order = seedOrder(size);
-  const slots = order.map(seedNum => seedNum <= N ? seedsArray[seedNum - 1].teamId : null);
-  const groupOf = {}; seedsArray.forEach(s => groupOf[s.teamId] = s.groupId);
-  for (let pass = 0; pass < 4; pass++) {
-    let conflict = false;
-    for (let i = 0; i < slots.length; i += 2) {
-      const a = slots[i], b = slots[i + 1];
-      if (a == null || b == null) continue;
-      if (groupOf[a] && groupOf[a] === groupOf[b]) {
-        conflict = true;
-        for (let j = i + 2; j < slots.length; j += 2) {
-          const c = slots[j]; if (c == null) continue;
-          if (groupOf[c] !== groupOf[a]) { slots[j] = b; slots[i + 1] = c; break; }
-        }
-      }
-    }
-    if (!conflict) break;
-  }
+  const slots = distributeSlots(seedsArray, size);
   return { slots, depth: Math.log2(size), teamCount: N };
 }
 
