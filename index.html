@@ -158,6 +158,10 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
 .tv-bar button { padding:7px 14px; border-radius:8px; border:1px solid rgba(255,255,255,.3); background:rgba(255,255,255,.08); color:#fff; font-family:'Oswald',sans-serif; font-size:13px; cursor:pointer; }
 .tv-bar button:hover { background:rgba(255,255,255,.2); }
 .tv-show-tab { position:fixed; right:14px; bottom:14px; z-index:210; width:42px; height:42px; border-radius:50%; background:rgba(0,0,0,.6); border:1px solid rgba(255,255,255,.3); color:#fff; align-items:center; justify-content:center; cursor:pointer; font-size:17px; display:none; }
+.tv-msg-banner { position:fixed; left:0; right:0; bottom:0; z-index:205; background:linear-gradient(90deg,#b45309,#d97706); color:#fff; padding:clamp(10px,1.8vh,20px) clamp(16px,3vw,40px); font-family:'Oswald',sans-serif; font-weight:600; font-size:clamp(16px,2.4vw,30px); text-align:center; display:none; align-items:center; justify-content:center; box-shadow:0 -4px 18px rgba(0,0,0,.35); }
+.tv-msg-full { position:fixed; inset:0; z-index:206; background:radial-gradient(ellipse at top,#3a2306 0%,#1a1204 60%,#0a0602 100%); color:#fff; display:none; align-items:center; justify-content:center; text-align:center; padding:6vw; font-family:'Oswald',sans-serif; font-weight:700; font-size:clamp(28px,5.5vw,72px); line-height:1.3; }
+.tv-msg-flash { animation:tvMsgFlash 1s step-start infinite; }
+@keyframes tvMsgFlash { 50% { opacity:.35; } }
 
 #liveClosedOverlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.75); z-index:500; align-items:center; justify-content:center; padding:20px; }
 </style>
@@ -461,8 +465,11 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
     <label><input type="checkbox" id="tvScrollToggle" checked onchange="tvSetScroll(this.checked)"> 🔃 Défilement</label>
     <button onclick="tvToggleFullscreen()">⛶ Plein écran</button>
     <button onclick="tvToggleHidden()">🙈 Masquer</button>
+    <button data-role="scorer" style="display:none" onclick="openMessagesModal()">📢 Messages</button>
   </div>
   <div class="tv-show-tab" id="tvShowTab" onclick="tvToggleHidden()" title="Réglages">⚙</div>
+  <div class="tv-msg-banner" id="tvMsgBanner"></div>
+  <div class="tv-msg-full" id="tvMsgFull"></div>
 </div>
 
 </div><!-- /appScreen -->
@@ -500,6 +507,43 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
       <strong>Classement :</strong> 1) Victoires · 2) Confrontation directe · 3) Goal-average · 4) Points marqués.<br>
       <strong>Phase 2 :</strong> les 2 premiers → Principale ; les autres → Consolante.<br>
       <strong>Classement final :</strong> Principale puis Consolante.
+    </div>
+  </div>
+</div>
+
+<!-- ── Modale gestion des messages écran ── -->
+<div class="modal-overlay" id="messagesModal">
+  <div class="modal-box" style="max-width:640px">
+    <div class="card-ttl">📢 Messages écran <button class="btn btn-ghost btn-xs" onclick="closeMessagesModal()">✕</button></div>
+
+    <div class="card" style="margin-bottom:12px;background:var(--s3)">
+      <div class="card-ttl" style="font-size:13px">⚡ Message manuel (instantané)</div>
+      <label>Texte</label>
+      <textarea id="manualMsgText" rows="2" style="width:100%;font-family:inherit;font-size:14px;padding:8px" placeholder="Ex : Merci de libérer les terrains 3 et 4"></textarea>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin:8px 0">
+        <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="manualMsgFlash"> ✨ Clignotant</label>
+        <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="manualMsgFull"> 🖥 Plein écran (sinon bandeau)</label>
+      </div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap">
+        <button class="btn btn-b btn-sm" onclick="sendManualMessage()">📢 Diffuser maintenant</button>
+        <button class="btn btn-ghost btn-sm" onclick="stopManualMessage()">⏹ Arrêter</button>
+      </div>
+      <div id="manualMsgStatus" style="font-size:12px;color:var(--muted);margin-top:6px"></div>
+    </div>
+
+    <div class="card" style="margin-bottom:12px">
+      <div class="card-ttl" style="font-size:13px">🗓 Messages programmés</div>
+      <div class="field-grid" style="margin-bottom:8px">
+        <div style="grid-column:1/-1"><label>Texte</label><input type="text" id="newMsgText" placeholder="Ex : Le concours débutera à 9h00 précises" style="font-size:14px"></div>
+        <div><label>Début</label><input type="datetime-local" id="newMsgStart" style="font-size:13px"></div>
+        <div><label>Fin</label><input type="datetime-local" id="newMsgEnd" style="font-size:13px"></div>
+      </div>
+      <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
+        <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="newMsgFlash"> ✨ Clignotant</label>
+        <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="newMsgFull"> 🖥 Plein écran (sinon bandeau)</label>
+        <button class="btn btn-b btn-sm" onclick="addScheduledMessage()">➕ Ajouter</button>
+      </div>
+      <div id="scheduledMsgListEl" style="display:flex;flex-direction:column;gap:8px"></div>
     </div>
   </div>
 </div>
@@ -545,6 +589,7 @@ let liveWatchIv = null;
 let pendingSpecTarget = null;
 let tvCycleIv = null, tvClockIv = null, tvScrollIv = null, tvScrollRAF = null;
 let tvScreenIndex = 0, tvLastPhase = null, tvLastScreensSig = null, tvLastRenderedKey = null;
+let unsubMessages = null, TV_MESSAGES = [];
 
 const ST = {
   page: 1, prevPage: 1, rulesOpen: false,
@@ -712,6 +757,7 @@ onAuthStateChanged(auth, async (user) => {
     applyRoleUI();
     subscribeToTournament();
     subscribeToResults();
+    subscribeToMessages();
     if (isAdmin()) subscribeToRegistrations();
   } else {
     console.log('Utilisateur déconnecté');
@@ -816,6 +862,7 @@ window.enterLiveModeAndGo = async function(target) {
   showApp(); applyRoleUI();
   subscribeToTournamentPublic();
   subscribeToResultsPublic();
+  subscribeToMessages();
   startLiveWatch();
   pendingSpecTarget = null;
   const overlayEl = document.getElementById('liveClosedOverlay');
@@ -886,6 +933,15 @@ function subscribeToResultsPublic() {
     });
     refreshCurrentPage();
   }, () => {});
+}
+
+function subscribeToMessages() {
+  if (unsubMessages) { unsubMessages(); unsubMessages = null; }
+  unsubMessages = onSnapshot(collection(db, 'petanque_messages'), snap => {
+    TV_MESSAGES = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    renderScheduledMessagesList();
+    updateTVMessageDisplay();
+  }, e => console.warn('subscribeToMessages', e));
 }
 
 function subscribeToTournament() {
@@ -2087,7 +2143,7 @@ function scheduleTVAdvance() {
   tvCycleIv = setTimeout(() => { const s2 = getActiveTVScreens(); if (s2.length > 1) tvScreenIndex = (tvScreenIndex + 1) % s2.length; renderTVContent(); }, sec * 1000);
 }
 
-function updateTVClock() { const el = document.getElementById('tvClock'); if (el) el.textContent = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }); }
+function updateTVClock() { const el = document.getElementById('tvClock'); if (el) el.textContent = new Date().toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit', second: '2-digit' }); updateTVMessageDisplay(); }
 
 let tvScrollState = { phase: 'pausedTop', since: 0 };
 
@@ -2131,6 +2187,105 @@ function startTVAutoScroll() {
 }
 
 function stopTVAutoScroll() { if (tvScrollIv) { clearInterval(tvScrollIv); tvScrollIv = null; } if (tvScrollRAF) { cancelAnimationFrame(tvScrollRAF); tvScrollRAF = null; } }
+
+// ═══════════════════════════════════════════════════════════
+// MESSAGES ÉCRAN (bandeau / plein écran, programmés ou manuels)
+// ═══════════════════════════════════════════════════════════
+window.openMessagesModal = function() {
+  renderScheduledMessagesList();
+  const manual = TV_MESSAGES.find(m => m.id === 'manual');
+  document.getElementById('manualMsgText').value = manual ? (manual.text || '') : '';
+  document.getElementById('manualMsgFlash').checked = manual ? !!manual.flash : false;
+  document.getElementById('manualMsgFull').checked = manual ? !!manual.fullscreen : false;
+  document.getElementById('manualMsgStatus').textContent = (manual && manual.enabled) ? '🔴 En cours de diffusion' : '';
+  document.getElementById('messagesModal').style.display = 'flex';
+};
+window.closeMessagesModal = function() { document.getElementById('messagesModal').style.display = 'none'; };
+
+async function sendManualMessage() {
+  const text = document.getElementById('manualMsgText').value.trim();
+  if (!text) { alert('Merci de saisir un texte.'); return; }
+  const flash = document.getElementById('manualMsgFlash').checked;
+  const fullscreen = document.getElementById('manualMsgFull').checked;
+  try {
+    await setDoc(doc(db, 'petanque_messages', 'manual'), { text, flash, fullscreen, manual: true, enabled: true, createdAt: Date.now() }, { merge: true });
+    document.getElementById('manualMsgStatus').textContent = '🔴 En cours de diffusion';
+  } catch (e) { console.error('sendManualMessage', e); alert('Erreur : ' + e.message); }
+}
+async function stopManualMessage() {
+  try { await setDoc(doc(db, 'petanque_messages', 'manual'), { enabled: false }, { merge: true }); document.getElementById('manualMsgStatus').textContent = ''; }
+  catch (e) { console.error('stopManualMessage', e); }
+}
+window.sendManualMessage = sendManualMessage;
+window.stopManualMessage = stopManualMessage;
+
+window.addScheduledMessage = async function() {
+  const text = document.getElementById('newMsgText').value.trim();
+  const start = document.getElementById('newMsgStart').value;
+  const end = document.getElementById('newMsgEnd').value;
+  if (!text) { alert('Merci de saisir un texte.'); return; }
+  if (!start || !end) { alert('Merci de renseigner une heure de début et de fin.'); return; }
+  if (new Date(end) <= new Date(start)) { alert('L\'heure de fin doit être après l\'heure de début.'); return; }
+  const flash = document.getElementById('newMsgFlash').checked;
+  const fullscreen = document.getElementById('newMsgFull').checked;
+  try {
+    const ref = doc(collection(db, 'petanque_messages'));
+    await setDoc(ref, { text, startAt: new Date(start).toISOString(), endAt: new Date(end).toISOString(), flash, fullscreen, manual: false, enabled: true, createdAt: Date.now() });
+    document.getElementById('newMsgText').value = ''; document.getElementById('newMsgStart').value = ''; document.getElementById('newMsgEnd').value = '';
+    document.getElementById('newMsgFlash').checked = false; document.getElementById('newMsgFull').checked = false;
+  } catch (e) { console.error('addScheduledMessage', e); alert('Erreur : ' + e.message); }
+};
+window.deleteScheduledMessage = async function(id) {
+  if (!confirm('Supprimer ce message programmé ?')) return;
+  try { await deleteDoc(doc(db, 'petanque_messages', id)); } catch (e) { console.error('deleteScheduledMessage', e); }
+};
+window.toggleScheduledMessageEnabled = async function(id, enabled) {
+  try { await setDoc(doc(db, 'petanque_messages', id), { enabled }, { merge: true }); } catch (e) { console.error('toggleScheduledMessageEnabled', e); }
+};
+
+function fmtDT(iso) { try { return new Date(iso).toLocaleString('fr-FR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' }); } catch (e) { return iso; } }
+
+function renderScheduledMessagesList() {
+  const el = document.getElementById('scheduledMsgListEl'); if (!el) return;
+  const list = TV_MESSAGES.filter(m => !m.manual);
+  if (!list.length) { el.innerHTML = '<div style="font-size:12px;color:var(--muted)">Aucun message programmé.</div>'; return; }
+  list.sort((a, b) => new Date(a.startAt) - new Date(b.startAt));
+  el.innerHTML = list.map(m => `
+    <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px;border:1px solid var(--bdr);border-radius:8px">
+      <div style="flex:1;min-width:180px">
+        <div style="font-size:13px;font-weight:600">${escHTML(m.text)}</div>
+        <div style="font-size:11px;color:var(--muted)">${fmtDT(m.startAt)} → ${fmtDT(m.endAt)}${m.flash ? ' · ✨ clignotant' : ''}${m.fullscreen ? ' · 🖥 plein écran' : ''}</div>
+      </div>
+      <label style="display:flex;align-items:center;gap:4px;font-size:11px"><input type="checkbox" ${m.enabled !== false ? 'checked' : ''} onchange="toggleScheduledMessageEnabled('${m.id}', this.checked)"> actif</label>
+      <button class="btn btn-ghost btn-xs" style="color:var(--red)" onclick="deleteScheduledMessage('${m.id}')">🗑</button>
+    </div>`).join('');
+}
+
+function escHTML(s) { return String(s || '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
+
+function getActiveTVMessage() {
+  const manual = TV_MESSAGES.find(m => m.id === 'manual' && m.enabled);
+  if (manual) return manual;
+  const now = Date.now();
+  const active = TV_MESSAGES.filter(m => !m.manual && m.enabled !== false && m.startAt && m.endAt && now >= new Date(m.startAt).getTime() && now <= new Date(m.endAt).getTime());
+  active.sort((a, b) => new Date(a.startAt) - new Date(b.startAt));
+  return active[0] || null;
+}
+
+function updateTVMessageDisplay() {
+  const banner = document.getElementById('tvMsgBanner'), full = document.getElementById('tvMsgFull');
+  if (!banner || !full) return;
+  const msg = getActiveTVMessage();
+  if (!msg) { banner.style.display = 'none'; full.style.display = 'none'; return; }
+  if (msg.fullscreen) {
+    full.style.display = 'flex'; full.className = 'tv-msg-full' + (msg.flash ? ' tv-msg-flash' : '');
+    full.textContent = msg.text; banner.style.display = 'none';
+  } else {
+    full.style.display = 'none'; banner.style.display = 'flex';
+    banner.className = 'tv-msg-banner' + (msg.flash ? ' tv-msg-flash' : '');
+    banner.textContent = '📢 ' + msg.text;
+  }
+}
 
 function renderTVPage() { renderTVSettingsUI(); renderTVContent(); }
 
