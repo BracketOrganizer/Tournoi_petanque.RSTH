@@ -522,6 +522,7 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
       <textarea id="manualMsgText" rows="2" style="width:100%;font-family:inherit;font-size:14px;padding:8px" placeholder="Ex : Merci de libérer les terrains 3 et 4"></textarea>
       <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin:8px 0">
         <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="manualMsgFlash"> ✨ Clignotant</label>
+        <label style="display:flex;align-items:center;gap:6px">pendant <input type="number" id="manualMsgFlashSec" min="1" max="60" value="5" style="width:52px;padding:6px"> sec</label>
         <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="manualMsgFull"> 🖥 Plein écran (sinon bandeau)</label>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
@@ -540,6 +541,7 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
       </div>
       <div style="display:flex;gap:14px;flex-wrap:wrap;align-items:center;margin-bottom:8px">
         <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="newMsgFlash"> ✨ Clignotant</label>
+        <label style="display:flex;align-items:center;gap:6px">pendant <input type="number" id="newMsgFlashSec" min="1" max="60" value="5" style="width:52px;padding:6px"> sec</label>
         <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="newMsgFull"> 🖥 Plein écran (sinon bandeau)</label>
         <button class="btn btn-b btn-sm" onclick="addScheduledMessage()">➕ Ajouter</button>
       </div>
@@ -2196,6 +2198,7 @@ window.openMessagesModal = function() {
   const manual = TV_MESSAGES.find(m => m.id === 'manual');
   document.getElementById('manualMsgText').value = manual ? (manual.text || '') : '';
   document.getElementById('manualMsgFlash').checked = manual ? !!manual.flash : false;
+  document.getElementById('manualMsgFlashSec').value = manual && manual.flashSec ? manual.flashSec : 5;
   document.getElementById('manualMsgFull').checked = manual ? !!manual.fullscreen : false;
   document.getElementById('manualMsgStatus').textContent = (manual && manual.enabled) ? '🔴 En cours de diffusion' : '';
   document.getElementById('messagesModal').style.display = 'flex';
@@ -2206,9 +2209,10 @@ async function sendManualMessage() {
   const text = document.getElementById('manualMsgText').value.trim();
   if (!text) { alert('Merci de saisir un texte.'); return; }
   const flash = document.getElementById('manualMsgFlash').checked;
+  const flashSec = Math.max(1, +document.getElementById('manualMsgFlashSec').value || 5);
   const fullscreen = document.getElementById('manualMsgFull').checked;
   try {
-    await setDoc(doc(db, 'petanque_messages', 'manual'), { text, flash, fullscreen, manual: true, enabled: true, createdAt: Date.now() }, { merge: true });
+    await setDoc(doc(db, 'petanque_messages', 'manual'), { text, flash, flashSec, fullscreen, manual: true, enabled: true, createdAt: Date.now() }, { merge: true });
     document.getElementById('manualMsgStatus').textContent = '🔴 En cours de diffusion';
   } catch (e) { console.error('sendManualMessage', e); alert('Erreur : ' + e.message); }
 }
@@ -2227,12 +2231,13 @@ window.addScheduledMessage = async function() {
   if (!start || !end) { alert('Merci de renseigner une heure de début et de fin.'); return; }
   if (new Date(end) <= new Date(start)) { alert('L\'heure de fin doit être après l\'heure de début.'); return; }
   const flash = document.getElementById('newMsgFlash').checked;
+  const flashSec = Math.max(1, +document.getElementById('newMsgFlashSec').value || 5);
   const fullscreen = document.getElementById('newMsgFull').checked;
   try {
     const ref = doc(collection(db, 'petanque_messages'));
-    await setDoc(ref, { text, startAt: new Date(start).toISOString(), endAt: new Date(end).toISOString(), flash, fullscreen, manual: false, enabled: true, createdAt: Date.now() });
+    await setDoc(ref, { text, startAt: new Date(start).toISOString(), endAt: new Date(end).toISOString(), flash, flashSec, fullscreen, manual: false, enabled: true, createdAt: Date.now() });
     document.getElementById('newMsgText').value = ''; document.getElementById('newMsgStart').value = ''; document.getElementById('newMsgEnd').value = '';
-    document.getElementById('newMsgFlash').checked = false; document.getElementById('newMsgFull').checked = false;
+    document.getElementById('newMsgFlash').checked = false; document.getElementById('newMsgFlashSec').value = 5; document.getElementById('newMsgFull').checked = false;
   } catch (e) { console.error('addScheduledMessage', e); alert('Erreur : ' + e.message); }
 };
 window.deleteScheduledMessage = async function(id) {
@@ -2254,7 +2259,7 @@ function renderScheduledMessagesList() {
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px;border:1px solid var(--bdr);border-radius:8px">
       <div style="flex:1;min-width:180px">
         <div style="font-size:13px;font-weight:600">${escHTML(m.text)}</div>
-        <div style="font-size:11px;color:var(--muted)">${fmtDT(m.startAt)} → ${fmtDT(m.endAt)}${m.flash ? ' · ✨ clignotant' : ''}${m.fullscreen ? ' · 🖥 plein écran' : ''}</div>
+        <div style="font-size:11px;color:var(--muted)">${fmtDT(m.startAt)} → ${fmtDT(m.endAt)}${m.flash ? ' · ✨ clignotant ' + Math.max(1, +m.flashSec || 5) + 's' : ''}${m.fullscreen ? ' · 🖥 plein écran' : ''}</div>
       </div>
       <label style="display:flex;align-items:center;gap:4px;font-size:11px"><input type="checkbox" ${m.enabled !== false ? 'checked' : ''} onchange="toggleScheduledMessageEnabled('${m.id}', this.checked)"> actif</label>
       <button class="btn btn-ghost btn-xs" style="color:var(--red)" onclick="deleteScheduledMessage('${m.id}')">🗑</button>
@@ -2272,17 +2277,23 @@ function getActiveTVMessage() {
   return active[0] || null;
 }
 
+let tvActiveMsgKey = null, tvActiveMsgSince = 0;
+
 function updateTVMessageDisplay() {
   const banner = document.getElementById('tvMsgBanner'), full = document.getElementById('tvMsgFull');
   if (!banner || !full) return;
   const msg = getActiveTVMessage();
-  if (!msg) { banner.style.display = 'none'; full.style.display = 'none'; return; }
+  if (!msg) { banner.style.display = 'none'; full.style.display = 'none'; tvActiveMsgKey = null; return; }
+  const key = msg.id + '|' + msg.text;
+  if (key !== tvActiveMsgKey) { tvActiveMsgKey = key; tvActiveMsgSince = Date.now(); }
+  const flashSec = Math.max(1, +msg.flashSec || 5);
+  const isFlashing = !!msg.flash && (Date.now() - tvActiveMsgSince) < flashSec * 1000;
   if (msg.fullscreen) {
-    full.style.display = 'flex'; full.className = 'tv-msg-full' + (msg.flash ? ' tv-msg-flash' : '');
+    full.style.display = 'flex'; full.className = 'tv-msg-full' + (isFlashing ? ' tv-msg-flash' : '');
     full.textContent = msg.text; banner.style.display = 'none';
   } else {
     full.style.display = 'none'; banner.style.display = 'flex';
-    banner.className = 'tv-msg-banner' + (msg.flash ? ' tv-msg-flash' : '');
+    banner.className = 'tv-msg-banner' + (isFlashing ? ' tv-msg-flash' : '');
     banner.textContent = '📢 ' + msg.text;
   }
 }
