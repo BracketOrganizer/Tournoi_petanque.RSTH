@@ -524,6 +524,8 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
         <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="manualMsgFlash"> ✨ Clignotant</label>
         <label style="display:flex;align-items:center;gap:6px">pendant <input type="number" id="manualMsgFlashSec" min="1" max="60" value="5" style="width:52px;padding:6px"> sec</label>
         <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="manualMsgFull"> 🖥 Plein écran (sinon bandeau)</label>
+        <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="manualMsgSound"> 🔔 Sonnerie</label>
+        <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="manualMsgVibrate"> 📳 Vibreur</label>
       </div>
       <div style="display:flex;gap:8px;flex-wrap:wrap">
         <button class="btn btn-b btn-sm" onclick="sendManualMessage()">📢 Diffuser maintenant</button>
@@ -543,6 +545,8 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
         <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="newMsgFlash"> ✨ Clignotant</label>
         <label style="display:flex;align-items:center;gap:6px">pendant <input type="number" id="newMsgFlashSec" min="1" max="60" value="5" style="width:52px;padding:6px"> sec</label>
         <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="newMsgFull"> 🖥 Plein écran (sinon bandeau)</label>
+        <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="newMsgSound"> 🔔 Sonnerie</label>
+        <label style="display:flex;align-items:center;gap:6px"><input type="checkbox" id="newMsgVibrate"> 📳 Vibreur</label>
         <button class="btn btn-b btn-sm" onclick="addScheduledMessage()">➕ Ajouter</button>
       </div>
       <div id="scheduledMsgListEl" style="display:flex;flex-direction:column;gap:8px"></div>
@@ -2200,6 +2204,8 @@ window.openMessagesModal = function() {
   document.getElementById('manualMsgFlash').checked = manual ? !!manual.flash : false;
   document.getElementById('manualMsgFlashSec').value = manual && manual.flashSec ? manual.flashSec : 5;
   document.getElementById('manualMsgFull').checked = manual ? !!manual.fullscreen : false;
+  document.getElementById('manualMsgSound').checked = manual ? !!manual.sound : false;
+  document.getElementById('manualMsgVibrate').checked = manual ? !!manual.vibrate : false;
   document.getElementById('manualMsgStatus').textContent = (manual && manual.enabled) ? '🔴 En cours de diffusion' : '';
   document.getElementById('messagesModal').style.display = 'flex';
 };
@@ -2211,8 +2217,10 @@ async function sendManualMessage() {
   const flash = document.getElementById('manualMsgFlash').checked;
   const flashSec = Math.max(1, +document.getElementById('manualMsgFlashSec').value || 5);
   const fullscreen = document.getElementById('manualMsgFull').checked;
+  const sound = document.getElementById('manualMsgSound').checked;
+  const vibrate = document.getElementById('manualMsgVibrate').checked;
   try {
-    await setDoc(doc(db, 'petanque_messages', 'manual'), { text, flash, flashSec, fullscreen, manual: true, enabled: true, createdAt: Date.now() }, { merge: true });
+    await setDoc(doc(db, 'petanque_messages', 'manual'), { text, flash, flashSec, fullscreen, sound, vibrate, manual: true, enabled: true, createdAt: Date.now() }, { merge: true });
     document.getElementById('manualMsgStatus').textContent = '🔴 En cours de diffusion';
   } catch (e) { console.error('sendManualMessage', e); alert('Erreur : ' + e.message); }
 }
@@ -2233,11 +2241,14 @@ window.addScheduledMessage = async function() {
   const flash = document.getElementById('newMsgFlash').checked;
   const flashSec = Math.max(1, +document.getElementById('newMsgFlashSec').value || 5);
   const fullscreen = document.getElementById('newMsgFull').checked;
+  const sound = document.getElementById('newMsgSound').checked;
+  const vibrate = document.getElementById('newMsgVibrate').checked;
   try {
     const ref = doc(collection(db, 'petanque_messages'));
-    await setDoc(ref, { text, startAt: new Date(start).toISOString(), endAt: new Date(end).toISOString(), flash, flashSec, fullscreen, manual: false, enabled: true, createdAt: Date.now() });
+    await setDoc(ref, { text, startAt: new Date(start).toISOString(), endAt: new Date(end).toISOString(), flash, flashSec, fullscreen, sound, vibrate, manual: false, enabled: true, createdAt: Date.now() });
     document.getElementById('newMsgText').value = ''; document.getElementById('newMsgStart').value = ''; document.getElementById('newMsgEnd').value = '';
     document.getElementById('newMsgFlash').checked = false; document.getElementById('newMsgFlashSec').value = 5; document.getElementById('newMsgFull').checked = false;
+    document.getElementById('newMsgSound').checked = false; document.getElementById('newMsgVibrate').checked = false;
   } catch (e) { console.error('addScheduledMessage', e); alert('Erreur : ' + e.message); }
 };
 window.deleteScheduledMessage = async function(id) {
@@ -2259,7 +2270,7 @@ function renderScheduledMessagesList() {
     <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;padding:8px;border:1px solid var(--bdr);border-radius:8px">
       <div style="flex:1;min-width:180px">
         <div style="font-size:13px;font-weight:600">${escHTML(m.text)}</div>
-        <div style="font-size:11px;color:var(--muted)">${fmtDT(m.startAt)} → ${fmtDT(m.endAt)}${m.flash ? ' · ✨ clignotant ' + Math.max(1, +m.flashSec || 5) + 's' : ''}${m.fullscreen ? ' · 🖥 plein écran' : ''}</div>
+        <div style="font-size:11px;color:var(--muted)">${fmtDT(m.startAt)} → ${fmtDT(m.endAt)}${m.flash ? ' · ✨ clignotant ' + Math.max(1, +m.flashSec || 5) + 's' : ''}${m.fullscreen ? ' · 🖥 plein écran' : ''}${m.sound ? ' · 🔔 son' : ''}${m.vibrate ? ' · 📳 vibreur' : ''}</div>
       </div>
       <label style="display:flex;align-items:center;gap:4px;font-size:11px"><input type="checkbox" ${m.enabled !== false ? 'checked' : ''} onchange="toggleScheduledMessageEnabled('${m.id}', this.checked)"> actif</label>
       <button class="btn btn-ghost btn-xs" style="color:var(--red)" onclick="deleteScheduledMessage('${m.id}')">🗑</button>
@@ -2267,6 +2278,26 @@ function renderScheduledMessagesList() {
 }
 
 function escHTML(s) { return String(s || '').replace(/[&<>]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c])); }
+
+function playTVMsgAlert() {
+  try {
+    const ctx = window.__tvAlertCtx || (window.__tvAlertCtx = new (window.AudioContext || window.webkitAudioContext)());
+    if (ctx.state === 'suspended') ctx.resume().catch(() => {});
+    const now = ctx.currentTime;
+    [0, 0.35, 0.7].forEach(offset => {
+      const osc = ctx.createOscillator(), gain = ctx.createGain();
+      osc.frequency.value = 880;
+      gain.gain.setValueAtTime(0.0001, now + offset);
+      gain.gain.exponentialRampToValueAtTime(0.3, now + offset + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + offset + 0.28);
+      osc.connect(gain); gain.connect(ctx.destination);
+      osc.start(now + offset); osc.stop(now + offset + 0.3);
+    });
+  } catch (e) { console.warn('playTVMsgAlert', e); }
+}
+function vibrateTVMsgAlert() {
+  try { if (navigator.vibrate) navigator.vibrate([200, 100, 200, 100, 200]); } catch (e) {}
+}
 
 function getActiveTVMessage() {
   const manual = TV_MESSAGES.find(m => m.id === 'manual' && m.enabled);
@@ -2285,7 +2316,11 @@ function updateTVMessageDisplay() {
   const msg = getActiveTVMessage();
   if (!msg) { banner.style.display = 'none'; full.style.display = 'none'; tvActiveMsgKey = null; return; }
   const key = msg.id + '|' + msg.text;
-  if (key !== tvActiveMsgKey) { tvActiveMsgKey = key; tvActiveMsgSince = Date.now(); }
+  if (key !== tvActiveMsgKey) {
+    tvActiveMsgKey = key; tvActiveMsgSince = Date.now();
+    if (msg.sound) playTVMsgAlert();
+    if (msg.vibrate) vibrateTVMsgAlert();
+  }
   const flashSec = Math.max(1, +msg.flashSec || 5);
   const isFlashing = !!msg.flash && (Date.now() - tvActiveMsgSince) < flashSec * 1000;
   if (msg.fullscreen) {
