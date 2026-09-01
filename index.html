@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no">
 <meta name="theme-color" content="#fdf8f0">
-<title>🎱 Trophée Pétanque Doublette — RSTH</title>
+<title>Trophée Pétanque Doublette — RSTH</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Oswald:wght@400;500;600;700&display=swap" rel="stylesheet">
 <script type="importmap">
@@ -28,6 +28,7 @@
   --brand:#c1440e; --brand2:#9c3509;
 }
 * { box-sizing: border-box; }
+.pt-icon { width:1em; height:1em; vertical-align:-0.15em; flex-shrink:0; }
 body { margin:0; background:var(--s0); color:var(--ink); font-family:Arial,sans-serif; -webkit-font-smoothing:antialiased; }
 button { font-family:inherit; }
 .wrap { max-width:1100px; margin:0 auto; padding:16px; }
@@ -61,7 +62,9 @@ input[type=text],input[type=number],input[type=time],input[type=email],input[typ
 .login-box { background:#ffffff; border-radius:18px; padding:30px 26px; max-width:420px; width:100%; box-shadow:0 18px 50px rgba(20,60,50,.12); }
 .login-brand { font-family:'Oswald',sans-serif; font-weight:700; font-size:24px; color:#1f6f5c; text-align:center; margin-bottom:4px; }
 .login-sub { text-align:center; color:#8a9a94; font-size:13px; margin-bottom:20px; }
-.login-org-ttl { text-align:center; font-family:'Oswald',sans-serif; font-weight:700; font-size:17px; letter-spacing:.5px; text-transform:uppercase; color:#1a3f66; margin-bottom:12px; }
+.login-org-ttl { text-align:center; font-family:'Oswald',sans-serif; font-weight:700; font-size:17px; letter-spacing:.5px; text-transform:uppercase; color:#1a3f66; margin-bottom:2px; }
+.login-org-private { text-align:center; font-size:11px; font-weight:700; letter-spacing:1px; text-transform:uppercase; color:#8a5a1f; margin-bottom:12px; }
+.login-org-private span { background:rgba(193,130,10,.15); border:1px solid rgba(193,130,10,.35); border-radius:20px; padding:2px 10px; }
 .login-divider { display:flex; align-items:center; gap:10px; color:#5a7291; font-size:11px; margin:16px 0; }
 .login-divider::before,.login-divider::after { content:''; flex:1; height:1px; background:rgba(26,63,102,.18); }
 #loginScreen input { background:rgba(255,255,255,.75); border:1px solid rgba(26,63,102,.22); color:#20334a; margin-bottom:10px; color-scheme:light; }
@@ -201,6 +204,7 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
 
     <div class="login-org-section">
       <div class="login-org-ttl">🔑 Organisateurs / Scoreurs</div>
+      <div class="login-org-private"><span>Privé</span></div>
       <div id="authMsg"></div>
       <button class="btn-google" onclick="loginGoogle()">
         <svg width="18" height="18" viewBox="0 0 48 48"><path fill="#EA4335" d="M24 9.5c3.54 0 6.71 1.22 9.21 3.6l6.85-6.85C35.9 2.38 30.47 0 24 0 14.62 0 6.51 5.33 2.56 13.22l7.98 6.19C12.43 13.08 17.74 9.5 24 9.5z"/><path fill="#4285F4" d="M46.98 24.55c0-1.57-.15-3.09-.38-4.55H24v9.02h12.94c-.58 2.96-2.26 5.48-4.78 7.18l7.73 6c4.51-4.18 7.09-10.36 7.09-17.65z"/><path fill="#FBBC05" d="M10.53 28.59c-.48-1.45-.76-2.99-.76-4.59s.27-3.14.76-4.59l-7.98-6.19C.92 16.46 0 20.12 0 24c0 3.88.92 7.54 2.56 10.78l7.97-6.19z"/><path fill="#34A853" d="M24 48c6.48 0 11.93-2.13 15.89-5.81l-7.73-6c-2.18 1.48-4.97 2.31-8.16 2.31-6.26 0-11.57-3.59-13.46-8.91l-7.98 6.19C6.51 42.67 14.62 48 24 48z"/></svg>
@@ -227,13 +231,13 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
 </div>
 
 <header class="hdr">
-  <div class="hdr-brand" id="hdrBrandText">🎱 Trophée Pétanque Doublette</div>
+  <div class="hdr-brand" id="hdrBrandText"><svg class="pt-icon" viewBox="0 0 28 28" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="14" r="10" fill="#aab3ba"/><circle cx="12" cy="14" r="10" fill="none" stroke="#6b7378" stroke-width="1"/><path d="M3 14a9 9 0 0 1 18 0" fill="none" stroke="#8b949a" stroke-width="1.1"/><path d="M12 4v20M4.6 8.6l14.8 10.8M19.4 8.6L4.6 19.4" stroke="#7d858b" stroke-width="0.8" opacity=".55"/><ellipse cx="8.5" cy="9.5" rx="3" ry="2" fill="#fff" opacity=".4"/><circle cx="22" cy="22" r="4.2" fill="#c1712f"/><circle cx="22" cy="22" r="4.2" fill="none" stroke="#8a4f1f" stroke-width="1"/></svg> Trophée Pétanque Doublette</div>
   <span id="roleBadge" class="hdr-desktop-only"></span>
   <div class="hdr-spacer"></div>
   <div class="hdr-desktop-only" style="display:flex;gap:8px;align-items:center">
     <button class="hdr-btn" id="backBtn" style="display:none" onclick="goBack()">← Retour</button>
     <button class="hdr-btn" id="fwdBtn" style="display:none" onclick="goFwd()">Suivant →</button>
-    <button class="hdr-btn" id="liveBtn" data-role="scorer" onclick="goToLive()" style="display:none">🎱 Live</button>
+    <button class="hdr-btn" id="liveBtn" data-role="scorer" onclick="goToLive()" style="display:none"><svg class="pt-icon" viewBox="0 0 28 28" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="14" r="10" fill="#aab3ba"/><circle cx="12" cy="14" r="10" fill="none" stroke="#6b7378" stroke-width="1"/><path d="M3 14a9 9 0 0 1 18 0" fill="none" stroke="#8b949a" stroke-width="1.1"/><path d="M12 4v20M4.6 8.6l14.8 10.8M19.4 8.6L4.6 19.4" stroke="#7d858b" stroke-width="0.8" opacity=".55"/><ellipse cx="8.5" cy="9.5" rx="3" ry="2" fill="#fff" opacity=".4"/><circle cx="22" cy="22" r="4.2" fill="#c1712f"/><circle cx="22" cy="22" r="4.2" fill="none" stroke="#8a4f1f" stroke-width="1"/></svg> Live</button>
     <button class="hdr-btn" id="tvBtn" data-role="scorer" onclick="goTo('TV')" style="display:none">📺 Écran</button>
     <button class="hdr-btn" id="adminBtn" data-role="admin" onclick="toggleAdminPanel()" style="display:none">👑 Admin</button>
     <button class="hdr-btn" id="logoutBtn" onclick="logout()" style="color:var(--red)">⏻ Quitter</button>
@@ -243,7 +247,7 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
 <div class="hdr-drawer-overlay" id="menuOverlay" onclick="closeMobileMenu()"></div>
 <div class="hdr-drawer" id="mobileDrawer">
   <button class="hdr-drawer-btn" onclick="closeMobileMenu();toggleRules()">📋 Règlement</button>
-  <button class="hdr-drawer-btn" id="drawerLiveBtn" data-role="scorer" onclick="closeMobileMenu();goToLive()" style="display:none">🎱 Live</button>
+  <button class="hdr-drawer-btn" id="drawerLiveBtn" data-role="scorer" onclick="closeMobileMenu();goToLive()" style="display:none"><svg class="pt-icon" viewBox="0 0 28 28" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="14" r="10" fill="#aab3ba"/><circle cx="12" cy="14" r="10" fill="none" stroke="#6b7378" stroke-width="1"/><path d="M3 14a9 9 0 0 1 18 0" fill="none" stroke="#8b949a" stroke-width="1.1"/><path d="M12 4v20M4.6 8.6l14.8 10.8M19.4 8.6L4.6 19.4" stroke="#7d858b" stroke-width="0.8" opacity=".55"/><ellipse cx="8.5" cy="9.5" rx="3" ry="2" fill="#fff" opacity=".4"/><circle cx="22" cy="22" r="4.2" fill="#c1712f"/><circle cx="22" cy="22" r="4.2" fill="none" stroke="#8a4f1f" stroke-width="1"/></svg> Live</button>
   <button class="hdr-drawer-btn" id="drawerTvBtn" data-role="scorer" onclick="closeMobileMenu();goTo('TV')" style="display:none">📺 Écran</button>
   <button class="hdr-drawer-btn" id="drawerAdminBtn" data-role="admin" onclick="closeMobileMenu();toggleAdminPanel()" style="display:none">👑 Admin</button>
   <button class="hdr-drawer-btn" id="drawerBackBtn" style="display:none" onclick="closeMobileMenu();goBack()">← Retour</button>
@@ -277,7 +281,7 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
         <div><label>Mot de passe</label><input type="password" id="newUserPass" placeholder="••••••••" style="font-size:14px"></div>
         <div><label>Rôle</label>
           <select id="newUserRole" style="padding:9px 8px">
-            <option value="scorer">🎱 Scorer</option>
+            <option value="scorer">Scorer</option>
             <option value="admin">👑 Admin</option>
           </select>
         </div>
@@ -317,7 +321,7 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
 <div class="wrap">
   <div class="sec-ttl">⚙️ Configuration du tournoi</div>
   <div class="card">
-    <div class="card-ttl">🎱 Identité</div>
+    <div class="card-ttl"><svg class="pt-icon" viewBox="0 0 28 28" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="14" r="10" fill="#aab3ba"/><circle cx="12" cy="14" r="10" fill="none" stroke="#6b7378" stroke-width="1"/><path d="M3 14a9 9 0 0 1 18 0" fill="none" stroke="#8b949a" stroke-width="1.1"/><path d="M12 4v20M4.6 8.6l14.8 10.8M19.4 8.6L4.6 19.4" stroke="#7d858b" stroke-width="0.8" opacity=".55"/><ellipse cx="8.5" cy="9.5" rx="3" ry="2" fill="#fff" opacity=".4"/><circle cx="22" cy="22" r="4.2" fill="#c1712f"/><circle cx="22" cy="22" r="4.2" fill="none" stroke="#8a4f1f" stroke-width="1"/></svg> Identité</div>
     <div class="field-grid">
       <div><label>Nom du tournoi</label><input type="text" id="cfgName" onchange="onCfgChange()"></div>
       <div><label>Club organisateur</label><input type="text" id="cfgClub" onchange="onCfgChange()"></div>
@@ -390,7 +394,7 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
 <!-- ══ PAGE 4 — TOURNOI EN DIRECT ══ -->
 <div class="page" id="page4">
 <div class="wrap">
-  <div class="sec-ttl">🎱 Tournoi en direct</div>
+  <div class="sec-ttl"><svg class="pt-icon" viewBox="0 0 28 28" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="14" r="10" fill="#aab3ba"/><circle cx="12" cy="14" r="10" fill="none" stroke="#6b7378" stroke-width="1"/><path d="M3 14a9 9 0 0 1 18 0" fill="none" stroke="#8b949a" stroke-width="1.1"/><path d="M12 4v20M4.6 8.6l14.8 10.8M19.4 8.6L4.6 19.4" stroke="#7d858b" stroke-width="0.8" opacity=".55"/><ellipse cx="8.5" cy="9.5" rx="3" ry="2" fill="#fff" opacity=".4"/><circle cx="22" cy="22" r="4.2" fill="#c1712f"/><circle cx="22" cy="22" r="4.2" fill="none" stroke="#8a4f1f" stroke-width="1"/></svg> Tournoi en direct</div>
   <div id="page4Tabs" style="display:none;gap:8px;margin-bottom:14px;flex-wrap:wrap">
     <button class="btn btn-ghost btn-sm" id="tabPoolsBtn" onclick="setPage4View('pools')">📋 Phase 1 — Poules</button>
     <button class="btn btn-ghost btn-sm" id="tabBracketsBtn" onclick="setPage4View('bracket')">🏆 Phase 2 — Tableaux</button>
@@ -453,7 +457,7 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
 <!-- ══ PAGE TV ══ -->
 <div class="page" id="pageTV">
   <div class="tv-hdr">
-    <div class="tv-brand">🎱 Trophée Pétanque Doublette</div>
+    <div class="tv-brand"><svg class="pt-icon" viewBox="0 0 28 28" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="14" r="10" fill="#aab3ba"/><circle cx="12" cy="14" r="10" fill="none" stroke="#6b7378" stroke-width="1"/><path d="M3 14a9 9 0 0 1 18 0" fill="none" stroke="#8b949a" stroke-width="1.1"/><path d="M12 4v20M4.6 8.6l14.8 10.8M19.4 8.6L4.6 19.4" stroke="#7d858b" stroke-width="0.8" opacity=".55"/><ellipse cx="8.5" cy="9.5" rx="3" ry="2" fill="#fff" opacity=".4"/><circle cx="22" cy="22" r="4.2" fill="#c1712f"/><circle cx="22" cy="22" r="4.2" fill="none" stroke="#8a4f1f" stroke-width="1"/></svg> Trophée Pétanque Doublette</div>
     <div class="tv-phase-badge" id="tvPhaseBadge">—</div>
     <div class="tv-clock" id="tvClock">--:--:--</div>
   </div>
@@ -573,6 +577,8 @@ import { getFirestore, doc, getDoc, setDoc, updateDoc, onSnapshot,
 // ═══════════════════════════════════════════════════════════
 // FIREBASE CONFIG
 // ═══════════════════════════════════════════════════════════
+const ICON_BOULE = '<svg class="pt-icon" viewBox="0 0 28 28" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="14" r="10" fill="#aab3ba"/><circle cx="12" cy="14" r="10" fill="none" stroke="#6b7378" stroke-width="1"/><path d="M3 14a9 9 0 0 1 18 0" fill="none" stroke="#8b949a" stroke-width="1.1"/><path d="M12 4v20M4.6 8.6l14.8 10.8M19.4 8.6L4.6 19.4" stroke="#7d858b" stroke-width="0.8" opacity=".55"/><ellipse cx="8.5" cy="9.5" rx="3" ry="2" fill="#fff" opacity=".4"/><circle cx="22" cy="22" r="4.2" fill="#c1712f"/><circle cx="22" cy="22" r="4.2" fill="none" stroke="#8a4f1f" stroke-width="1"/></svg>';
+
 const firebaseConfig = {
   apiKey: "AIzaSyCQhLIo-WXurUBS0QEiOjjd9tby9IKHtGs",
   authDomain: "tournoi-rsth-de-petanque.firebaseapp.com",
@@ -797,7 +803,7 @@ function applyRoleUI() {
     el.style.display = show ? '' : 'none';
   });
   const badge = document.getElementById('roleBadge');
-  if (badge) badge.textContent = USER_ROLE === 'admin' ? '👑 Admin' : USER_ROLE === 'scorer' ? '🎱 Scorer' : '👁 Spectateur';
+  if (badge) badge.innerHTML = USER_ROLE === 'admin' ? '👑 Admin' : USER_ROLE === 'scorer' ? ICON_BOULE + ' Scorer' : '👁 Spectateur';
   const specNav = document.getElementById('specNav');
   if (specNav) specNav.style.display = USER_ROLE === 'spectator' ? 'flex' : 'none';
   const stepNav = document.getElementById('stepNav');
@@ -1299,7 +1305,7 @@ window.loadUserList = async function() {
       return `<div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px;padding:9px 12px;background:var(--s1);border:1px solid var(--bdr);border-radius:6px;margin-bottom:5px">
         <div style="min-width:0;flex:1 1 220px">
           <div style="font-size:14px;word-break:break-all">${u.email}</div>
-          <span style="color:${roleColor};font-size:11px;font-weight:700">${u.role === 'admin' ? '👑' : u.role === 'scorer' ? '🎱' : '👁'} ${u.role}</span>
+          <span style="color:${roleColor};font-size:11px;font-weight:700">${u.role === 'admin' ? '👑' : u.role === 'scorer' ? ICON_BOULE : '👁'} ${u.role}</span>
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0">
           <select style="padding:4px 6px;font-size:11px;border-radius:6px;border:1px solid var(--bdr)" onchange="changeUserRole('${d.id}',this.value)">
@@ -1398,7 +1404,7 @@ function renderCfgSummary() {
   const pauses = Array.isArray(c.pauses) ? c.pauses : [];
   const pauseTxt = pauses.length ? ' · 🍽️ ' + pauses.map(pauseSummaryText).join(' · ') : '';
   el.innerHTML = `<div class="info info-b">
-    🎱 <strong>${c.n}</strong> équipes · <strong>${numGroups}</strong> groupes de 4 ·
+    ${ICON_BOULE} <strong>${c.n}</strong> équipes · <strong>${numGroups}</strong> groupes de 4 ·
     <strong>${c.courts}</strong> terrains · partie ≈ <strong>${c.mt} min</strong> (+${c.tt} min) ·
     Score : <strong>${c.scoreMax} pts</strong> avec <strong>${c.ecart} pts d'écart</strong>${pauseTxt}<br>
     📊 Phase 2 : <strong>${nPrincipale}</strong> en Principale · <strong>${nConsolante}</strong> en Consolante
@@ -1456,8 +1462,8 @@ window.onCfgChange = function() {
   ST.cfg.ecart  = Math.max(1,  Math.min(3, +document.getElementById('cfgEcart').value || 2));
   ST.cfg.balance = document.getElementById('cfgBalance').value || 'level';
   renderCfgSummary();
-  document.title = '🎱 ' + ST.cfg.name;
-  const brandEl = document.getElementById('hdrBrandText'); if (brandEl) brandEl.textContent = '🎱 ' + ST.cfg.name;
+  document.title = ST.cfg.name;
+  const brandEl = document.getElementById('hdrBrandText'); if (brandEl) brandEl.innerHTML = ICON_BOULE + ' ' + ST.cfg.name;
 };
 
 window.saveCfgAndNext = async function() {
@@ -2406,7 +2412,7 @@ function getTVScreens() {
   const screens = [];
   if (ST.phase === 'pools' || ST.phase === 'config') {
     const flat = ST.poolSchedule.map(m => { const r = getPoolResult(m.matchId); return { label: 'Groupe ' + m.group.slice(1) + ' · T' + m.court, time: m.time, aId: m.a, bId: m.b, r, done: (r.ga !== '' && r.gb !== ''), isLive: ST.poolSchedule.find(pm => pm.a === m.a && pm.b === m.b)?.round === ST.activePoolRound }; });
-    screens.push({ key: 'pool-results', kind: 'matches', title: '🎱 Matchs de Poules', render: () => tvMatchGridHTML(flat) });
+    screens.push({ key: 'pool-results', kind: 'matches', title: ICON_BOULE + ' Matchs de Poules', render: () => tvMatchGridHTML(flat) });
     screens.push({ key: 'pool-std', kind: 'standings', title: '📊 Classement des Poules', render: tvStandingsPoolsHTML });
     return screens;
   }
@@ -2448,7 +2454,7 @@ function getActiveTVScreens() {
 function renderTVContent() {
   const el = document.getElementById('tvContent'); if (!el) return;
   const phaseEl = document.getElementById('tvPhaseBadge');
-  if (phaseEl) phaseEl.textContent = ST.phase === 'pools' ? '🎱 Phase 1' : ST.phase === 'bracket' ? '🏆 Phase 2' : ST.phase === 'config' ? '⚙️ Préparation' : '🏁 Terminé';
+  if (phaseEl) phaseEl.innerHTML = ST.phase === 'pools' ? ICON_BOULE + ' Phase 1' : ST.phase === 'bracket' ? '🏆 Phase 2' : ST.phase === 'config' ? '⚙️ Préparation' : '🏁 Terminé';
   if (ST.phase !== tvLastPhase) { tvLastPhase = ST.phase; tvScreenIndex = 0; }
   const screens = getActiveTVScreens();
   const sig = screens.map(s => s.key).join('|');
@@ -2458,8 +2464,8 @@ function renderTVContent() {
   const subEl = document.getElementById('tvSubTitle');
   const isScreenChange = !screen || screen.key !== tvLastRenderedKey;
   tvLastRenderedKey = screen ? screen.key : null;
-  if (!screen) { if (subEl) subEl.textContent = ''; el.innerHTML = '<div class="tv-empty">Rien à afficher.</div>'; }
-  else { if (subEl) subEl.textContent = screen.title; el.innerHTML = screen.render(); }
+  if (!screen) { if (subEl) subEl.innerHTML = ''; el.innerHTML = '<div class="tv-empty">Rien à afficher.</div>'; }
+  else { if (subEl) subEl.innerHTML = screen.title; el.innerHTML = screen.render(); }
   if (!isScreenChange) return;
   requestAnimationFrame(startTVAutoScroll);
   scheduleTVAdvance();
