@@ -917,6 +917,7 @@ function handleLiveOpenChange(nowOpen) {
   }
 }
 
+let _bgDetached = false, _bgDetachTO = null; // détachement des spectateurs en arrière-plan
 function startLiveWatch() {
   stopLiveWatch();
   unsubLiveWatch = onSnapshot(doc(db, 'petanque', 'status'), { includeMetadataChanges: true }, snap => {
@@ -924,14 +925,54 @@ function startLiveWatch() {
     if (snap.exists()) handleLiveOpenChange(snap.data().liveOpen === true);
   }, () => {});
   liveWatchIv = setInterval(async () => {
+    if (document.visibilityState !== 'visible' || _bgDetached) return; // inutile (et coûteux) écran éteint
     try { const snap = await getDoc(doc(db, 'petanque', 'status')); if (snap.exists()) handleLiveOpenChange(snap.data().liveOpen === true); } catch (e) {}
-  }, 20000);
+  }, 30000);
 }
 
 function stopLiveWatch() {
   if (unsubLiveWatch) { unsubLiveWatch(); unsubLiveWatch = null; }
   if (liveWatchIv)    { clearInterval(liveWatchIv); liveWatchIv = null; }
 }
+
+// ═══════════════════════════════════════════════════════════
+// ÉCONOMIE DE LECTURES FIRESTORE (plan Spark : 50 000 lectures / jour)
+// Un spectateur dont l'écran est éteint ou l'appli en arrière-plan reste
+// abonné : il « consomme » une lecture à chaque score saisi sans rien
+// regarder. Après 10 min en arrière-plan, on coupe l'écoute ; au retour, on
+// se réabonne (lecture initiale = état à jour).
+// Ne concerne ni l'admin / le scorer (ils écrivent), ni l'écran TV, ni
+// la page d'inscription.
+// ═══════════════════════════════════════════════════════════
+const BG_DETACH_MS = 10 * 60 * 1000;
+function _bgCanDetach() { return USER_ROLE === 'spectator' && ST.page !== 'TV' && ST.page !== 'REG'; }
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') {
+    clearTimeout(_bgDetachTO);
+    _bgDetachTO = setTimeout(() => {
+      if (document.visibilityState !== 'hidden' || _bgDetached || !_bgCanDetach()) return;
+      if (unsubTournament) { unsubTournament(); unsubTournament = null; }
+      if (unsubResults)    { unsubResults();    unsubResults = null; }
+      if (unsubMessages)   { unsubMessages();   unsubMessages = null; }
+      if (unsubRegStatus)  { unsubRegStatus();  unsubRegStatus = null; }
+      stopLiveWatch();
+      _bgDetached = true;
+    }, BG_DETACH_MS);
+  } else {
+    clearTimeout(_bgDetachTO);
+    if (_bgDetached) {
+      _bgDetached = false;
+      if (USER_ROLE === 'spectator') {
+        ST.results = {}; // une suppression survenue pendant l'absence ne serait pas signalée par la réécoute
+        subscribeToTournamentPublic();
+        subscribeToResultsPublic();
+        subscribeToMessages();
+        subscribeRegStatus();
+        startLiveWatch();
+      }
+    }
+  }
+});
 
 // ═══════════════════════════════════════════════════════════
 // FIRESTORE ABONNEMENTS
@@ -1120,14 +1161,19 @@ function updateRegistrationUI() {
   if (ST.page === 'REG') renderRegisterPage();
 }
 
-onSnapshot(doc(db, 'petanque', 'status'), snap => {
-  if (snap.exists()) {
-    const d = snap.data();
-    ST.registrationOpen = d.registrationOpen === true;
-    ST.registrationCount = d.registrationCount || 0;
-    updateRegistrationUI();
-  }
-}, () => {});
+let unsubRegStatus = null;
+function subscribeRegStatus() {
+  if (unsubRegStatus) return;
+  unsubRegStatus = onSnapshot(doc(db, 'petanque', 'status'), snap => {
+    if (snap.exists()) {
+      const d = snap.data();
+      ST.registrationOpen = d.registrationOpen === true;
+      ST.registrationCount = d.registrationCount || 0;
+      updateRegistrationUI();
+    }
+  }, () => {});
+}
+subscribeRegStatus();
 
 function registrationCap() { return ST.registrationMax != null ? ST.registrationMax : ST.cfg.n; }
 
