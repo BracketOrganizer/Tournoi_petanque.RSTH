@@ -606,6 +606,7 @@ let USER_ROLE = null;
 let unsubTournament = null;
 let unsubResults = null;
 let unsubLiveWatch = null;
+let unsubRegistrations = null; // inscriptions publiques en attente (admin) — temps réel
 let liveWatchIv = null;
 let pendingSpecTarget = null;
 let tvCycleIv = null, tvClockIv = null, tvScrollIv = null, tvScrollRAF = null;
@@ -733,6 +734,7 @@ window.loginEmail = async function() {
 };
 
 window.logout = async function() {
+  closeAdminPanel();
   unsubAll();
   await signOut(auth);
   USER_ROLE = null; CURRENT_USER = null;
@@ -740,11 +742,13 @@ window.logout = async function() {
 };
 
 function showLogin() {
+  closeAdminPanel();
   document.getElementById('loginScreen').style.display = 'flex';
   document.getElementById('appScreen').style.display = 'none';
 }
 
 function showApp() {
+  closeAdminPanel();
   document.getElementById('loginScreen').style.display = 'none';
   document.getElementById('appScreen').style.display = 'block';
 }
@@ -783,6 +787,7 @@ onAuthStateChanged(auth, async (user) => {
   } else {
     console.log('Utilisateur déconnecté');
     CURRENT_USER = null; USER_ROLE = null;
+    if (unsubRegistrations) { unsubRegistrations(); unsubRegistrations = null; }
     showLogin();
   }
 });
@@ -796,6 +801,7 @@ getRedirectResult(auth).catch((e) => {
 // RÔLE UI
 // ═══════════════════════════════════════════════════════════
 function applyRoleUI() {
+  if (!isAdmin()) closeAdminPanel(); // le panneau admin ne reste jamais ouvert pour un non-admin
   document.querySelectorAll('[data-role]').forEach(el => {
     const need = el.dataset.role;
     let show = false;
@@ -842,6 +848,7 @@ window.exitLiveClosedToHome = function() {
 };
 
 function unsubAll() {
+  if (unsubRegistrations) { unsubRegistrations(); unsubRegistrations = null; }
   if (unsubResults)    { unsubResults();    unsubResults = null; }
   if (unsubTournament) { unsubTournament(); unsubTournament = null; }
   if (unsubLiveWatch)  { unsubLiveWatch();  unsubLiveWatch = null; }
@@ -1078,6 +1085,7 @@ function refreshCurrentPage() {
 }
 
 window.goTo = function(n) {
+  closeAdminPanel(); // changement de page = le panneau admin se referme
   if (USER_ROLE === 'scorer' && n !== 4) n = 4;
   if (!LIVE_FREE_PAGES.includes(n) && isLiveBlocked()) {
     pendingSpecTarget = n;
@@ -1274,10 +1282,16 @@ function updateRegistrationToggleBtn() {
 }
 
 function subscribeToRegistrations() {
-  onSnapshot(collection(db, 'petanque_registrations'), snap => {
+  if (unsubRegistrations) { renderRegistrationsPanel(); return; } // déjà abonné
+  unsubRegistrations = onSnapshot(collection(db, 'petanque_registrations'), snap => {
     ST.registrations = snap.docs.map(d => ({ id: d.id, ...d.data() })).filter(r => r.status !== 'accepted' && r.status !== 'rejected');
     renderRegistrationsPanel();
-  }, e => console.warn('subscribeToRegistrations', e));
+  }, e => {
+    console.warn('subscribeToRegistrations', e);
+    // L'écoute est terminée : on libère le verrou et on réessaie seul
+    unsubRegistrations = null;
+    setTimeout(() => { if (isAdmin() && !unsubRegistrations) subscribeToRegistrations(); }, 5000);
+  });
 }
 
 function renderRegistrationsPanel() {
@@ -1320,10 +1334,31 @@ window.rejectRegistration = async function(id) {
 // ═══════════════════════════════════════════════════════════
 // ADMIN — GESTION STAFF
 // ═══════════════════════════════════════════════════════════
+// Ferme le panneau admin (oubli de fermeture, changement de page, déconnexion, changement de compte…).
+// Efface aussi le mot de passe saisi et la liste des comptes affichée.
+// (Les inscriptions en attente restent écoutées pendant toute la session admin.)
+function closeAdminPanel() {
+  const el = document.getElementById('adminPanel');
+  if (el) el.style.display = 'none';
+  const pw = document.getElementById('newUserPass'); if (pw) pw.value = '';
+  const ul = document.getElementById('userListEl'); if (ul) ul.innerHTML = '';
+}
+window.closeAdminPanel = closeAdminPanel;
+// Panneau resté ouvert pendant que l'appli était en arrière-plan > 5 min : on le referme.
+let _adminHiddenAt = 0;
+document.addEventListener('visibilitychange', () => {
+  if (document.visibilityState === 'hidden') { _adminHiddenAt = Date.now(); return; }
+  if (_adminHiddenAt && Date.now() - _adminHiddenAt > 5 * 60 * 1000) closeAdminPanel();
+  _adminHiddenAt = 0;
+});
+
 window.toggleAdminPanel = function() {
   const el = document.getElementById('adminPanel');
-  el.style.display = el.style.display === 'none' ? 'block' : 'none';
-  if (el.style.display === 'block') loadUserList();
+  // display:none vient de la feuille de style : on lit le style réel (sinon le 1er clic ne faisait que « fermer »)
+  const opening = getComputedStyle(el).display === 'none';
+  if (!opening) { closeAdminPanel(); return; }
+  el.style.display = 'block';
+  if (isAdmin()) { loadUserList(); subscribeToRegistrations(); }
 };
 
 window.adminCreateUser = async function() {
