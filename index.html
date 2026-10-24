@@ -168,6 +168,16 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
 @keyframes tvMsgFlash { 50% { opacity:.35; } }
 
 #liveClosedOverlay { display:none; position:fixed; inset:0; background:rgba(0,0,0,.75); z-index:500; align-items:center; justify-content:center; padding:20px; }
+/* Panneau admin : sous-dossiers repliables */
+details.adm-fold { padding:0; overflow:hidden; }
+details.adm-fold > summary { list-style:none; cursor:pointer; margin:0; padding:14px 16px; user-select:none; }
+details.adm-fold > summary::-webkit-details-marker { display:none; }
+details.adm-fold > summary::after { content:'▾'; margin-left:auto; color:var(--muted); transition:transform .2s; }
+details.adm-fold:not([open]) > summary::after { transform:rotate(-90deg); }
+details.adm-fold > .adm-body { padding:0 16px 16px; }
+.adm-count { display:inline-block; min-width:22px; text-align:center; font-family:'Oswald',sans-serif; font-size:13px; font-weight:700; padding:1px 8px; border-radius:12px; background:var(--s2); color:var(--muted); }
+.adm-count.adm-count-on { background:var(--brand); color:#fff; }
+.hdr-badge { display:none; margin-left:6px; min-width:18px; text-align:center; font-size:11px; font-weight:700; padding:0 6px; border-radius:10px; background:var(--red); color:#fff; }
 </style>
 </head>
 <body>
@@ -240,7 +250,7 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
     <button class="hdr-btn" id="fwdBtn" style="display:none" onclick="goFwd()">Suivant →</button>
     <button class="hdr-btn" id="liveBtn" data-role="scorer" onclick="goToLive()" style="display:none"><svg class="pt-icon" viewBox="0 0 28 28" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="14" r="10" fill="#aab3ba"/><circle cx="12" cy="14" r="10" fill="none" stroke="#6b7378" stroke-width="1"/><path d="M3 14a9 9 0 0 1 18 0" fill="none" stroke="#8b949a" stroke-width="1.1"/><path d="M12 4v20M4.6 8.6l14.8 10.8M19.4 8.6L4.6 19.4" stroke="#7d858b" stroke-width="0.8" opacity=".55"/><ellipse cx="8.5" cy="9.5" rx="3" ry="2" fill="#fff" opacity=".4"/><circle cx="22" cy="22" r="4.2" fill="#c1712f"/><circle cx="22" cy="22" r="4.2" fill="none" stroke="#8a4f1f" stroke-width="1"/></svg> Live</button>
     <button class="hdr-btn" id="tvBtn" data-role="scorer" onclick="goTo('TV')" style="display:none">📺 Écran</button>
-    <button class="hdr-btn" id="adminBtn" data-role="admin" onclick="toggleAdminPanel()" style="display:none">👑 Admin</button>
+    <button class="hdr-btn" id="adminBtn" data-role="admin" onclick="toggleAdminPanel()" style="display:none">👑 Admin<span class="hdr-badge" id="adminBtnCount"></span></button>
     <button class="hdr-btn" id="logoutBtn" onclick="logout()" style="color:var(--red)">⏻ Quitter</button>
   </div>
   <button class="hdr-mobile-toggle" onclick="toggleMobileMenu()">☰</button>
@@ -250,7 +260,7 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
   <button class="hdr-drawer-btn" onclick="closeMobileMenu();toggleRules()">📋 Règlement</button>
   <button class="hdr-drawer-btn" id="drawerLiveBtn" data-role="scorer" onclick="closeMobileMenu();goToLive()" style="display:none"><svg class="pt-icon" viewBox="0 0 28 28" xmlns="http://www.w3.org/2000/svg"><circle cx="12" cy="14" r="10" fill="#aab3ba"/><circle cx="12" cy="14" r="10" fill="none" stroke="#6b7378" stroke-width="1"/><path d="M3 14a9 9 0 0 1 18 0" fill="none" stroke="#8b949a" stroke-width="1.1"/><path d="M12 4v20M4.6 8.6l14.8 10.8M19.4 8.6L4.6 19.4" stroke="#7d858b" stroke-width="0.8" opacity=".55"/><ellipse cx="8.5" cy="9.5" rx="3" ry="2" fill="#fff" opacity=".4"/><circle cx="22" cy="22" r="4.2" fill="#c1712f"/><circle cx="22" cy="22" r="4.2" fill="none" stroke="#8a4f1f" stroke-width="1"/></svg> Live</button>
   <button class="hdr-drawer-btn" id="drawerTvBtn" data-role="scorer" onclick="closeMobileMenu();goTo('TV')" style="display:none">📺 Écran</button>
-  <button class="hdr-drawer-btn" id="drawerAdminBtn" data-role="admin" onclick="closeMobileMenu();toggleAdminPanel()" style="display:none">👑 Admin</button>
+  <button class="hdr-drawer-btn" id="drawerAdminBtn" data-role="admin" onclick="closeMobileMenu();toggleAdminPanel()" style="display:none">👑 Admin<span class="hdr-badge" id="drawerAdminBtnCount"></span></button>
   <button class="hdr-drawer-btn" id="drawerBackBtn" style="display:none" onclick="closeMobileMenu();goBack()">← Retour</button>
   <button class="hdr-drawer-btn" id="drawerFwdBtn" style="display:none" onclick="closeMobileMenu();goFwd()">→ Suivant</button>
   <div class="hdr-drawer-sep"></div>
@@ -271,25 +281,32 @@ body.tv-mode .hdr-drawer, body.tv-mode .hdr-drawer-overlay { display:none!import
       <button class="btn btn-ghost btn-sm" onclick="resetAllScores()" style="color:var(--red)">♻️ Réinitialiser scores</button>
       <button class="btn btn-ghost btn-sm" onclick="newTournament()" style="color:var(--red)">🆕 Nouveau tournoi</button>
     </div>
-    <div class="card" style="margin-bottom:10px">
-      <div class="card-ttl">📝 Inscriptions publiques en attente <span id="registrationsCount" style="color:var(--brand)"></span></div>
-      <div id="registrationsListEl"></div>
-    </div>
-    <div class="card" style="margin-bottom:10px">
-      <div class="card-ttl">👥 Gestion du staff</div>
-      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-bottom:10px;align-items:end">
-        <div><label>Email</label><input type="email" id="newUserEmail" placeholder="scorer@email.com" style="font-size:14px"></div>
-        <div><label>Mot de passe</label><input type="password" id="newUserPass" placeholder="••••••••" style="font-size:14px"></div>
-        <div><label>Rôle</label>
-          <select id="newUserRole" style="padding:9px 8px">
-            <option value="scorer">Scorer</option>
-            <option value="admin">👑 Admin</option>
-          </select>
-        </div>
-        <div><button class="btn btn-b btn-sm" onclick="adminCreateUser()" style="width:100%">+ Créer</button></div>
+    <!-- Sous-dossier 1 : inscriptions publiques en attente (admin + users) -->
+    <details class="card adm-fold" id="foldRegs" open style="margin-bottom:10px">
+      <summary class="card-ttl">📝 Les inscriptions publiques en attente <span id="registrationsCount" class="adm-count">0</span></summary>
+      <div class="adm-body">
+        <div id="registrationsListEl"></div>
       </div>
-      <div id="userListEl"></div>
-    </div>
+    </details>
+    <!-- Sous-dossier 2 : gestion du staff (admin uniquement) -->
+    <details class="card adm-fold" id="foldStaff" data-role="owner" style="margin-bottom:10px;display:none">
+      <summary class="card-ttl">👥 Gestion du staff</summary>
+      <div class="adm-body">
+        <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;margin-bottom:10px;align-items:end">
+          <div><label>Email</label><input type="email" id="newUserEmail" placeholder="scorer@email.com" style="font-size:14px"></div>
+          <div><label>Mot de passe</label><input type="password" id="newUserPass" placeholder="••••••••" style="font-size:14px"></div>
+          <div><label>Rôle</label>
+            <select id="newUserRole" style="padding:9px 8px">
+              <option value="scorer">Scorer</option>
+              <option value="users">🛠 Users</option>
+              <option value="admin">👑 Admin</option>
+            </select>
+          </div>
+          <div><button class="btn btn-b btn-sm" onclick="adminCreateUser()" style="width:100%">+ Créer</button></div>
+        </div>
+        <div id="userListEl"></div>
+      </div>
+    </details>
   </div>
 </div>
 
@@ -648,7 +665,8 @@ const ST = {
 // ═══════════════════════════════════════════════════════════
 // FONCTIONS UTILITAIRES
 // ═══════════════════════════════════════════════════════════
-function isAdmin()  { return USER_ROLE === 'admin'; }
+function isAdmin()  { return USER_ROLE === 'admin' || USER_ROLE === 'users'; } // mêmes fonctions : admin + Users
+function isOwner()  { return USER_ROLE === 'admin'; }                           // réservé à l'admin : gestion du staff
 function isScorer() { return USER_ROLE === 'admin' || USER_ROLE === 'scorer'; }
 function isLiveBlocked() { return USER_ROLE === 'spectator' && !ST.liveOpen; }
 
@@ -806,11 +824,12 @@ function applyRoleUI() {
     const need = el.dataset.role;
     let show = false;
     if (need === 'admin')  show = isAdmin();
+    if (need === 'owner')  show = isOwner();
     if (need === 'scorer') show = isScorer();
     el.style.display = show ? '' : 'none';
   });
   const badge = document.getElementById('roleBadge');
-  if (badge) badge.innerHTML = USER_ROLE === 'admin' ? '👑 Admin' : USER_ROLE === 'scorer' ? ICON_BOULE + ' Scorer' : '👁 Spectateur';
+  if (badge) badge.innerHTML = USER_ROLE === 'admin' ? '👑 Admin' : USER_ROLE === 'users' ? '🛠 Users' : USER_ROLE === 'scorer' ? ICON_BOULE + ' Scorer' : '👁 Spectateur';
   const specNav = document.getElementById('specNav');
   if (specNav) specNav.style.display = USER_ROLE === 'spectator' ? 'flex' : 'none';
   const stepNav = document.getElementById('stepNav');
@@ -1297,7 +1316,12 @@ function subscribeToRegistrations() {
 function renderRegistrationsPanel() {
   const el = document.getElementById('registrationsListEl'); if (!el) return;
   const badge = document.getElementById('registrationsCount');
-  if (badge) badge.textContent = ST.registrations.length ? String(ST.registrations.length) : '';
+  const n = ST.registrations.length;
+  if (badge) { badge.textContent = String(n); badge.classList.toggle('adm-count-on', n > 0); }
+  ['adminBtnCount', 'drawerAdminBtnCount'].forEach(id => {
+    const b = document.getElementById(id); if (!b) return;
+    b.textContent = n ? String(n) : ''; b.style.display = n ? 'inline-block' : 'none';
+  });
   if (!ST.registrations.length) { el.innerHTML = '<div class="info info-b">Aucune inscription en attente.</div>'; return; }
   el.innerHTML = ST.registrations.map(r => `
     <div style="display:flex;align-items:center;gap:10px;background:var(--s1);border:1px solid var(--bdr);border-radius:10px;padding:10px 14px;margin-bottom:6px;flex-wrap:wrap">
@@ -1358,10 +1382,12 @@ window.toggleAdminPanel = function() {
   const opening = getComputedStyle(el).display === 'none';
   if (!opening) { closeAdminPanel(); return; }
   el.style.display = 'block';
-  if (isAdmin()) { loadUserList(); subscribeToRegistrations(); }
+  if (isOwner()) loadUserList();
+  if (isAdmin()) subscribeToRegistrations();
 };
 
 window.adminCreateUser = async function() {
+  if (!isOwner()) return;
   const email = document.getElementById('newUserEmail').value.trim();
   const pass  = document.getElementById('newUserPass').value;
   const role  = document.getElementById('newUserRole').value;
@@ -1378,20 +1404,21 @@ window.adminCreateUser = async function() {
 };
 
 window.loadUserList = async function() {
-  const el = document.getElementById('userListEl'); if (!el) return;
+  const el = document.getElementById('userListEl'); if (!el || !isOwner()) return;
   try {
     const snap = await getDocs(collection(db, 'users'));
     el.innerHTML = snap.docs.map(d => {
       const u = d.data();
-      const roleColor = u.role === 'admin' ? 'var(--brand)' : u.role === 'scorer' ? 'var(--blu)' : 'var(--muted)';
+      const roleColor = u.role === 'admin' ? 'var(--brand)' : u.role === 'users' ? 'var(--grn, #5c7a3a)' : u.role === 'scorer' ? 'var(--blu)' : 'var(--muted)';
       return `<div style="display:flex;flex-wrap:wrap;justify-content:space-between;align-items:center;gap:8px;padding:9px 12px;background:var(--s1);border:1px solid var(--bdr);border-radius:6px;margin-bottom:5px">
         <div style="min-width:0;flex:1 1 220px">
           <div style="font-size:14px;word-break:break-all">${u.email}</div>
-          <span style="color:${roleColor};font-size:11px;font-weight:700">${u.role === 'admin' ? '👑' : u.role === 'scorer' ? ICON_BOULE : '👁'} ${u.role}</span>
+          <span style="color:${roleColor};font-size:11px;font-weight:700">${u.role === 'admin' ? '👑' : u.role === 'users' ? '🛠' : u.role === 'scorer' ? ICON_BOULE : '👁'} ${u.role}</span>
         </div>
         <div style="display:flex;gap:6px;flex-shrink:0">
           <select style="padding:4px 6px;font-size:11px;border-radius:6px;border:1px solid var(--bdr)" onchange="changeUserRole('${d.id}',this.value)">
             <option value="scorer" ${u.role==='scorer'?'selected':''}>Scorer</option>
+            <option value="users"  ${u.role==='users'?'selected':''}>Users</option>
             <option value="admin"  ${u.role==='admin'?'selected':''}>Admin</option>
           </select>
           <button class="btn btn-ghost btn-xs" onclick="deleteUserFromList('${d.id}')" style="color:var(--red)">🗑️</button>
@@ -1402,11 +1429,13 @@ window.loadUserList = async function() {
 };
 
 window.changeUserRole = async function(uid, role) {
+  if (!isOwner()) return;
   try { await updateDoc(doc(db, 'users', uid), { role }); loadUserList(); }
   catch (e) { alert('Erreur : ' + e.message); }
 };
 
 window.deleteUserFromList = async function(uid) {
+  if (!isOwner()) return;
   if (!confirm('Retirer ce compte des rôles (devient spectateur) ?')) return;
   await deleteDoc(doc(db, 'users', uid)); loadUserList();
 };
