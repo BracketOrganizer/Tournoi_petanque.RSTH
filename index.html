@@ -365,12 +365,6 @@ details.adm-fold > .adm-body { padding:0 16px 16px; }
     <div class="field-grid">
       <div><label>Score maximum (pts)</label><input type="number" id="cfgScoreMax" min="11" max="25" onchange="onCfgChange()"></div>
       <div><label>Écart minimum pour victoire (pts)</label><input type="number" id="cfgEcart" min="1" max="3" onchange="onCfgChange()"></div>
-      <div><label>Répartition des groupes Phase 1</label>
-        <select id="cfgBalance" onchange="onCfgChange()">
-          <option value="level">Par niveau (têtes de série)</option>
-          <option value="random">Tirage au sort pur</option>
-        </select>
-      </div>
     </div>
   </div>
   <div id="cfgSummary"></div>
@@ -511,15 +505,7 @@ details.adm-fold > .adm-body { padding:0 16px 16px; }
     <input type="hidden" id="editTeamId">
     <label>Joueur 1 *</label><input type="text" id="editP1" style="margin-bottom:10px" placeholder="Prénom Nom">
     <label>Joueur 2 *</label><input type="text" id="editP2" style="margin-bottom:10px" placeholder="Prénom Nom">
-    <label>Club</label><input type="text" id="editClub" style="margin-bottom:10px" placeholder="Nom du club">
-    <label>Niveau (têtes de série)</label>
-    <select id="editLv" style="margin-bottom:14px">
-      <option value="1">⭐ Débutant</option>
-      <option value="2">⭐⭐</option>
-      <option value="3" selected>⭐⭐⭐ Confirmé</option>
-      <option value="4">⭐⭐⭐⭐</option>
-      <option value="5">⭐⭐⭐⭐⭐ Expert</option>
-    </select>
+    <label>Club</label><input type="text" id="editClub" style="margin-bottom:14px" placeholder="Nom du club">
     <div style="display:flex;gap:8px">
       <button class="btn btn-b" style="flex:1" onclick="saveEditTeam()">Enregistrer</button>
       <button class="btn btn-ghost" onclick="closeEditTeam()">Annuler</button>
@@ -657,7 +643,6 @@ const ST = {
     start: '09:00',
     scoreMax: 13,
     ecart: 2,
-    balance: 'level',
     pauses: []
   }
 };
@@ -1339,7 +1324,7 @@ window.acceptRegistration = async function(id) {
   const r = ST.registrations.find(x => x.id === id); if (!r) return;
   if (ST.teams.length >= ST.cfg.n) { alert("Le nombre d'équipes maximum (" + ST.cfg.n + ") est déjà atteint."); return; }
   const name = r.p1 + ' / ' + r.p2;
-  ST.teams.push({ id: 't' + Date.now() + Math.floor(Math.random() * 1000), p1: r.p1, p2: r.p2, club: r.club || '', lv: 3, name });
+  ST.teams.push({ id: 't' + Date.now() + Math.floor(Math.random() * 1000), p1: r.p1, p2: r.p2, club: r.club || '', name });
   await saveTournament({ teams: ST.teams });
   await setDoc(doc(db, 'petanque_registrations', id), { status: 'accepted' }, { merge: true });
   renderTeamsPage();
@@ -1496,7 +1481,6 @@ function syncCfgForm() {
   set('cfgN', c.n); set('cfgCourts', c.courts);
   set('cfgMt', c.mt); set('cfgTt', c.tt); set('cfgStart', c.start);
   set('cfgScoreMax', c.scoreMax); set('cfgEcart', c.ecart);
-  const bal = document.getElementById('cfgBalance'); if (bal) bal.value = c.balance;
   renderPausesEditor();
   renderCfgSummary();
 }
@@ -1571,7 +1555,6 @@ window.onCfgChange = function() {
   ST.cfg.start  = document.getElementById('cfgStart').value || '09:00';
   ST.cfg.scoreMax = Math.max(11, Math.min(25, +document.getElementById('cfgScoreMax').value || 13));
   ST.cfg.ecart  = Math.max(1,  Math.min(3, +document.getElementById('cfgEcart').value || 2));
-  ST.cfg.balance = document.getElementById('cfgBalance').value || 'level';
   renderCfgSummary();
   document.title = ST.cfg.name;
   const brandEl = document.getElementById('hdrBrandText'); if (brandEl) brandEl.innerHTML = ICON_BOULE + ' ' + ST.cfg.name;
@@ -1603,7 +1586,7 @@ function renderTeamsPage() {
       <div style="font-family:'Oswald',sans-serif;font-weight:700;color:var(--dim);width:28px">${i + 1}</div>
       <div style="flex:1">
         <div style="font-weight:700">${t.name}</div>
-        <div style="font-size:12px;color:var(--muted)">${t.p1} · ${t.p2}${t.club ? ' — ' + t.club : ''} ${'⭐'.repeat(t.lv || 3)}</div>
+        <div style="font-size:12px;color:var(--muted)">${t.p1} · ${t.p2}${t.club ? ' — ' + t.club : ''}</div>
       </div>
       ${isAdmin() ? `<button class="btn btn-ghost btn-xs" onclick="openEditTeam('${t.id}')">✏️</button>
       <button class="btn btn-ghost btn-xs" onclick="removeTeam('${t.id}')" style="color:var(--red)">🗑️</button>` : ''}
@@ -1612,12 +1595,11 @@ function renderTeamsPage() {
 }
 
 window.openEditTeam = function(id) {
-  const t = id ? tObj(id) : { id: null, name: '', p1: '', p2: '', club: ST.cfg.club || '', lv: 3 };
+  const t = id ? tObj(id) : { id: null, name: '', p1: '', p2: '', club: ST.cfg.club || '' };
   document.getElementById('editTeamId').value = t.id || '';
   document.getElementById('editP1').value = t.p1 || '';
   document.getElementById('editP2').value = t.p2 || '';
   document.getElementById('editClub').value = t.club || '';
-  document.getElementById('editLv').value = t.lv || 3;
   document.getElementById('editTeamModal').style.display = 'flex';
   document.getElementById('editTeamTitle').textContent = id ? 'Modifier l\'équipe' : 'Nouvelle équipe';
 };
@@ -1629,14 +1611,13 @@ window.saveEditTeam = async function() {
   const p1   = document.getElementById('editP1').value.trim();
   const p2   = document.getElementById('editP2').value.trim();
   const club = document.getElementById('editClub').value.trim();
-  const lv   = +document.getElementById('editLv').value || 3;
   if (!p1 || !p2) { alert('Les deux noms de joueurs sont requis.'); return; }
   const name = p1 + ' / ' + p2;
   if (id) {
-    const t = tObj(id); Object.assign(t, { p1, p2, club, lv, name });
+    const t = tObj(id); Object.assign(t, { p1, p2, club, name });
   } else {
     if (ST.teams.length >= ST.cfg.n) { alert('Nombre d\'équipes déjà atteint (' + ST.cfg.n + ').'); return; }
-    ST.teams.push({ id: 't' + Date.now() + Math.floor(Math.random() * 1000), p1, p2, club, lv, name });
+    ST.teams.push({ id: 't' + Date.now() + Math.floor(Math.random() * 1000), p1, p2, club, name });
   }
   await saveTournament({ teams: ST.teams });
   closeEditTeam(); renderTeamsPage();
@@ -1659,7 +1640,7 @@ window.autoFillTeams = async function() {
   for (let i = 0; i < need; i++) {
     const k = ST.teams.length + 1;
     ST.teams.push({ id: 't' + Date.now() + i, p1: 'Joueur ' + (k*2-1), p2: 'Joueur ' + (k*2),
-      club: clubs[i % clubs.length], lv: (i % 5) + 1, name: 'Joueur ' + (k*2-1) + ' / Joueur ' + (k*2) });
+      club: clubs[i % clubs.length], name: 'Joueur ' + (k*2-1) + ' / Joueur ' + (k*2) });
   }
   await saveTournament({ teams: ST.teams }); renderTeamsPage();
 };
@@ -1680,9 +1661,7 @@ function computeGroupSizes(n) {
 function buildGroupsPhase1() {
   const sizes = computeGroupSizes(ST.teams.length);
   const numGroups = sizes.length;
-  const pool = ST.cfg.balance === 'level'
-    ? ST.teams.slice().sort((a, b) => (b.lv || 3) - (a.lv || 3)).map(t => t.id)
-    : shuffle(ST.teams.map(t => t.id));
+  const pool = shuffle(ST.teams.map(t => t.id)); // tirage au sort pur
   const groups = sizes.map((sz, i) => ({ id: 'G' + (i + 1), teamIds: [] }));
   pool.forEach((tid, i) => { groups[i % numGroups].teamIds.push(tid); });
   return groups;
